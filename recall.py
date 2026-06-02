@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """recall — find and resume lost Claude Code sessions across all projects."""
 
+import datetime
 import glob
 import json
 import os
@@ -27,6 +28,7 @@ _MSG = {
         "live": "● 运行中 (pid {}) — Enter 跳到该窗口",
         "branch_one": "分支:", "branch_hdr": "分支 (★=对话最多):",
         "projbranch_hdr": "项目/分支 (★=对话最多):",
+        "started": "开始", "last_active": "最后活动",
         "title": "标题:", "trail_hdr": "── Prompt 轨迹 (最近在最下) ──",
         "more_earlier": "  … +{} 更早",
         "whereto_hdr": "── 上次干到哪 (现算·不调模型) ──",
@@ -49,6 +51,7 @@ _MSG = {
         "live": "● running (pid {}) — Enter jumps to its window",
         "branch_one": "Branch:", "branch_hdr": "Branches (★=most active):",
         "projbranch_hdr": "Projects / branches (★=most active):",
+        "started": "started", "last_active": "last active",
         "title": "Title:", "trail_hdr": "── Prompt trail (latest at bottom) ──",
         "more_earlier": "  … +{} earlier",
         "whereto_hdr": "── Where you left off (computed, no model) ──",
@@ -95,7 +98,7 @@ def save_config(path, cfg):
         pass
 # Bump whenever extract()'s output shape or logic changes, so stale records
 # (cached under an unchanged file mtime) are invalidated and re-extracted.
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 
 _ACK = {"ok", "y", "yes", "好", "嗯"}
 _FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -153,6 +156,15 @@ def _project_tree(pairs, root_fn=_repo_root):
     return result
 
 
+def _parse_ts(s):
+    if not isinstance(s, str):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def _snippet(text, limit=200):
     s = " ".join(text.split())
     return s[:limit] + ("…" if len(s) > limit else "")
@@ -207,10 +219,16 @@ def project_short(cwd):
     return os.path.basename(cwd.rstrip("/")) or cwd
 
 
-def last_prompt_display(record):
+def headline(record):
+    """The session's identifier line: its first prompt (states the task — a
+    better label than the last one), falling back to the ai-title."""
     if record["prompts"]:
-        return record["prompts"][-1]
+        return record["prompts"][0]
     return record.get("ai_title") or t("no_prompt")
+
+
+def abs_time(ts):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -233,9 +251,9 @@ def fzf_line(record, now, live_ids=()):
     leading 2-col slot marks sessions that are currently running (●)."""
     reltime = relative_time(int(record["mtime"]), now)
     proj = project_short(record["cwd"])
-    last = _clean(last_prompt_display(record))
+    head = _clean(headline(record))
     marker = "● " if record["session_id"] in live_ids else "  "
-    visible = f"{marker}{_pad(reltime, _TIME_COL)}  {_pad(proj, _PROJ_COL)}  {last}"
+    visible = f"{marker}{_pad(reltime, _TIME_COL)}  {_pad(proj, _PROJ_COL)}  {head}"
     kw = []  # project name is already searchable in `visible`, so omit it here
     for p in record.get("projects") or []:
         kw.extend(b["name"] for b in p["branches"])
@@ -282,8 +300,12 @@ def _branch_section(projects, color=False):
 def preview_text(record, now, live_pid=None, color=False):
     c = lambda s, code: _c(s, code, color)
     out = [c(project_short(record["cwd"]), "1;36") + "  ·  "
-           + c(relative_time(int(record["mtime"]), now), "2") + "  ·  "
            + c(t("msgs", record["msg_count"]), "2")]
+    when = []
+    if record.get("started"):
+        when.append(f"{t('started')} {abs_time(record['started'])}")
+    when.append(f"{t('last_active')} {relative_time(int(record['mtime']), now)}")
+    out.append(c("  ·  ".join(when), "2"))
     if live_pid:
         out.append(c(t("live", live_pid), "32"))
     out += _branch_section(record.get("projects") or [], color)
@@ -383,7 +405,7 @@ def run_list(records, now, out):
     for r in records:
         out.write(f"cd {r['cwd']} && claude -r {r['session_id']}"
                   f"   # {relative_time(int(r['mtime']), now)} · "
-                  f"{project_short(r['cwd'])} · {_clean(last_prompt_display(r))}\n")
+                  f"{project_short(r['cwd'])} · {_clean(headline(r))}\n")
 
 
 def build_index(paths, cache, extract_fn=None):
@@ -414,7 +436,7 @@ def build_index(paths, cache, extract_fn=None):
 
 def extract(path):
     """Parse a session JSONL file into one record dict, or None if it's empty."""
-    cwd = ai_title = last_assistant = None
+    cwd = ai_title = last_assistant = started = None
     prompts, files, seen = [], [], set()
     msg_cwb = []  # (cwd, branch) per user/assistant message, in file order
     msg_count = 0
@@ -446,6 +468,8 @@ def extract(path):
                 continue
             if cwd is None and d.get("cwd"):
                 cwd = d["cwd"]
+            if started is None and d.get("timestamp"):
+                started = _parse_ts(d["timestamp"])  # first timestamp = session start
             if t in ("user", "assistant"):
                 msg_count += 1
                 msg_cwb.append((d.get("cwd"), d.get("gitBranch")))
@@ -484,6 +508,7 @@ def extract(path):
         "prompts": prompts,
         "files_changed": files[:20],
         "last_assistant": last_assistant,
+        "started": started,
         "mtime": mtime,
         "msg_count": msg_count,
     }

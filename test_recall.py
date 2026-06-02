@@ -223,6 +223,24 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(projs[0]["branches"][0]["name"], "master")
 
 
+class ExtractStartedTest(unittest.TestCase):
+    def test_captures_first_message_timestamp_as_started(self):
+        import datetime
+        tmp = tempfile.mkdtemp()
+        lines = [
+            {"type": "user", "cwd": "/r", "gitBranch": "m",
+             "timestamp": "2026-05-06T06:00:16.000Z",
+             "message": {"role": "user", "content": "kick things off"}},
+            {"type": "assistant", "cwd": "/r",
+             "timestamp": "2026-05-06T07:00:00.000Z",
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+        ]
+        rec = recall.extract(write_session(tmp, SID, lines))
+        expected = datetime.datetime.fromisoformat(
+            "2026-05-06T06:00:16.000+00:00").timestamp()
+        self.assertEqual(rec["started"], expected)
+
+
 class ExtractDedupTest(unittest.TestCase):
     def test_consecutive_duplicate_prompts_collapse(self):
         tmp = tempfile.mkdtemp()
@@ -308,6 +326,7 @@ def sample_record(**over):
         "prompts": ["看下这个需求", "表单时区显示不对", "帮我部署 prod"],
         "files_changed": ["/repo/scheduler.go", "/repo/sub/schedule_test.go"],
         "last_assistant": "已触发 prod 部署，等 CI…",
+        "started": 990_000,
         "mtime": 999_000,
         "msg_count": 64,
     }
@@ -354,12 +373,21 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(recall.project_short("/a/b/webapp"), "webapp")
         self.assertEqual(recall.project_short("/a/b/webapp/"), "webapp")
 
-    def test_last_prompt_display_uses_last_prompt(self):
-        self.assertEqual(recall.last_prompt_display(sample_record()), "帮我部署 prod")
+    def test_headline_uses_first_prompt(self):
+        # the opening prompt states the task — better id than the last prompt
+        self.assertEqual(recall.headline(sample_record()), "看下这个需求")
 
-    def test_last_prompt_display_falls_back_to_title(self):
-        rec = sample_record(prompts=[])
-        self.assertEqual(recall.last_prompt_display(rec), "Review requirement")
+    def test_headline_falls_back_to_title(self):
+        self.assertEqual(recall.headline(sample_record(prompts=[])), "Review requirement")
+
+    def test_abs_time_formats_local_datetime(self):
+        self.assertRegex(recall.abs_time(990_000), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+
+    def test_preview_shows_started_and_last_active(self):
+        out = recall.preview_text(sample_record(started=990_000), self.NOW)
+        self.assertIn("开始", out)                       # started label
+        self.assertIn(recall.abs_time(990_000), out)      # absolute start time
+        self.assertIn("最后活动", out)                    # last-active label
 
     def test_fzf_line_recovers_id_and_cwd_via_parse_selection(self):
         line = recall.fzf_line(sample_record(), self.NOW)
@@ -381,7 +409,7 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(fields[0][2:].startswith(recall._pad(
             recall.relative_time(999_000, self.NOW), recall._TIME_COL)))
         self.assertIn("webapp", fields[0])
-        self.assertIn("帮我部署 prod", fields[0])  # last prompt lives in the visible col
+        self.assertIn("看下这个需求", fields[0])  # headline (first prompt) in visible col
 
     def test_fzf_line_marks_live_session_keeping_marker_slot_width(self):
         live = recall.fzf_line(sample_record(), self.NOW, live_ids={SID}).split("\t")
@@ -706,7 +734,7 @@ class RunListTest(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("claude -r " + SID, text)
         self.assertIn("webapp", text)
-        self.assertIn("帮我部署 prod", text)
+        self.assertIn("看下这个需求", text)  # headline = first prompt
 
     def test_empty_records_prints_friendly_message(self):
         out = io.StringIO()
