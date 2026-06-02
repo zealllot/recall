@@ -127,12 +127,18 @@ def last_prompt_display(record):
 
 
 def fzf_line(record, now):
-    """One tab-delimited row: 3 visible cells + hidden trail/id/cwd for search & action."""
+    """One tab-delimited row: 3 visible cells + a hidden search blob + id/cwd.
+    The blob carries the whole prompt trail plus branch/project names and the
+    ai-title, so a query matches by topic/branch, not just typed prompts."""
     reltime = relative_time(int(record["mtime"]), now)
     proj = project_short(record["cwd"])
     last = _clean(last_prompt_display(record))
-    trail = _clean(" / ".join(record["prompts"]))
-    return "\t".join([reltime, proj, last, trail, record["session_id"], record["cwd"]])
+    extra = [record.get("ai_title") or ""]
+    for p in record.get("projects") or []:
+        extra.append(p["name"])
+        extra.extend(b["name"] for b in p["branches"])
+    blob = _clean(" / ".join(record["prompts"]) + " " + " ".join(extra))
+    return "\t".join([reltime, proj, last, blob, record["session_id"], record["cwd"]])
 
 
 def _branch_section(projects):
@@ -424,7 +430,7 @@ def run_picker(records, now, query=""):
         f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
     lines = "\n".join([_exit_line()] + [fzf_line(r, now) for r in records])
     cmd = [
-        "fzf", "--delimiter=\t", "--with-nth=1,2,3",
+        "fzf", "--exact", "--delimiter=\t", "--with-nth=1,2,3",
         "--preview", f"cat {preview_dir}/{{5}}",
         "--preview-window=right,55%,wrap",
         "--header", "Enter 恢复 · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",

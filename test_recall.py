@@ -324,6 +324,18 @@ class RenderTest(unittest.TestCase):
         self.assertIn("时区", trail)
         self.assertIn("帮我部署", trail)
 
+    def test_fzf_line_search_field_includes_branches_projects_title(self):
+        # so `recall nutrition` finds a session by branch/topic, not just prompts
+        rec = sample_record(
+            ai_title="Add parent nutrition field",
+            projects=[{"name": "mcd-website", "path": "/p", "count": 9,
+                       "branches": [{"name": "mdx-12752-add-parent-nutrition-field",
+                                     "count": 9}]}])
+        field = recall.fzf_line(rec, self.NOW).split("\t")[3]
+        self.assertIn("nutrition", field)        # from branch name
+        self.assertIn("mcd-website", field)       # from project name
+        self.assertIn("Add parent nutrition", field)  # from ai title
+
     def test_fzf_line_sanitizes_tabs_and_newlines(self):
         rec = sample_record(prompts=["line1\twith\ttabs\nand newline"])
         line = recall.fzf_line(rec, self.NOW)
