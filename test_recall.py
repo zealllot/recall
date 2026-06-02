@@ -507,6 +507,12 @@ class RenderTest(unittest.TestCase):
         # b has 2 branches -> still an indented sub-tree
         self.assertTrue(any(l.startswith("    ") and "x" in l for l in lines))
 
+    def test_preview_title_hugs_headline_then_blank(self):
+        lines = recall.preview_text(sample_record(), self.NOW).splitlines()
+        self.assertIn("看下这个需求", lines[0])          # headline
+        self.assertTrue(lines[1].startswith("标题:"))     # ai-title right under it
+        self.assertEqual(lines[2], "")                    # then a blank line
+
     def test_preview_has_blank_line_after_header_block(self):
         lines = recall.preview_text(sample_record(), self.NOW).splitlines()
         # the project/branch section is preceded by a blank line

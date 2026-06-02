@@ -308,6 +308,9 @@ def preview_text(record, now, live_pid=None, color=False):
     # lead with the first prompt as a bold, bright title — shown fuller than in
     # the (narrow) list column. Terminals can't truly enlarge the font.
     out = [c(_truncate_cols(headline(record), _HEAD_COLS), "1;97")]
+    if record.get("ai_title"):  # the ai-title hugs the headline
+        out.append(c(t("title"), "2") + f" {record['ai_title']}")
+    out.append("")
     out.append(c(project_short(record["cwd"]), "1;36") + "  ·  "
                + c(t("msgs", record["msg_count"]), "2"))
     when = []
@@ -317,9 +320,7 @@ def preview_text(record, now, live_pid=None, color=False):
     out.append(c("  ·  ".join(when), "2"))
     if live_pid:
         out.append(c(t("live", live_pid), "32"))
-    if record.get("ai_title"):
-        out.append(c(t("title"), "2") + f" {record['ai_title']}")
-    out.append("")  # breathing room below the header block
+    out.append("")  # breathing room before the project/branch section
     out += _branch_section(record.get("projects") or [], color)
     out += ["", c(t("trail_hdr"), "36")]
     prompts = record["prompts"]
