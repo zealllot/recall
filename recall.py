@@ -317,10 +317,10 @@ def preview_text(record, now, live_pid=None, color=False):
     out.append(c("  ·  ".join(when), "2"))
     if live_pid:
         out.append(c(t("live", live_pid), "32"))
-    out.append("")  # breathing room below the header block
-    out += _branch_section(record.get("projects") or [], color)
     if record.get("ai_title"):
         out.append(c(t("title"), "2") + f" {record['ai_title']}")
+    out.append("")  # breathing room below the header block
+    out += _branch_section(record.get("projects") or [], color)
     out += ["", c(t("trail_hdr"), "36")]
     prompts = record["prompts"]
     overflow = len(prompts) - _TRAIL_CAP
