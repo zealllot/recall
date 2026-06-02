@@ -513,6 +513,15 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(lines[1].startswith("标题:"))     # ai-title right under it
         self.assertEqual(lines[2], "")                    # then a blank line
 
+    def test_preview_section_headers_use_one_consistent_style(self):
+        out = recall.preview_text(sample_record(), self.NOW)
+        self.assertNotIn("──", out)  # no mixed "── X ──" divider style
+
+    def test_preview_blank_line_before_files_section(self):
+        lines = recall.preview_text(sample_record(), self.NOW).splitlines()
+        fi = next(i for i, l in enumerate(lines) if l.startswith("改过的文件"))
+        self.assertEqual(lines[fi - 1], "")  # separated from the section above
+
     def test_preview_has_blank_line_after_header_block(self):
         lines = recall.preview_text(sample_record(), self.NOW).splitlines()
         # the project/branch section is preceded by a blank line

@@ -29,9 +29,9 @@ _MSG = {
         "branch_one": "分支:", "branch_hdr": "分支 (★=对话最多):",
         "projbranch_hdr": "项目/分支 (★=对话最多):",
         "started": "开始", "last_active": "最后活动",
-        "title": "标题:", "trail_hdr": "── Prompt 轨迹 (最近在最下) ──",
+        "title": "标题:", "trail_hdr": "Prompt 轨迹 (最近在最下):",
         "more_earlier": "  … +{} 更早",
-        "whereto_hdr": "── 上次干到哪 (现算·不调模型) ──",
+        "whereto_hdr": "上次干到哪 (现算·不调模型):",
         "last_reply": "Claude 末回复:", "files": "改过的文件 ({}):",
         "exit_label": "退出 (exit / quit) — 不恢复任何 session",
         "exit_preview": "按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)",
@@ -52,9 +52,9 @@ _MSG = {
         "branch_one": "Branch:", "branch_hdr": "Branches (★=most active):",
         "projbranch_hdr": "Projects / branches (★=most active):",
         "started": "started", "last_active": "last active",
-        "title": "Title:", "trail_hdr": "── Prompt trail (latest at bottom) ──",
+        "title": "Title:", "trail_hdr": "Prompt trail (latest at bottom):",
         "more_earlier": "  … +{} earlier",
-        "whereto_hdr": "── Where you left off (computed, no model) ──",
+        "whereto_hdr": "Where you left off (computed, no model):",
         "last_reply": "Claude's last reply:", "files": "Files changed ({}):",
         "exit_label": "exit / quit — resume nothing",
         "exit_preview": "Press Enter to quit recall without resuming.\n(or just press Esc / Ctrl-C)",
@@ -345,7 +345,7 @@ def preview_text(record, now, live_pid=None, color=False):
             if b not in seen:
                 seen.add(b)
                 names.append(b)
-        out.append(c(t("files", len(names)), "36"))
+        out += ["", c(t("files", len(names)), "36")]  # blank line separates it
         out += [f"  · {n}" for n in names[:_FILES_CAP]]
         if len(names) > _FILES_CAP:
             out.append(c(f"  … +{len(names) - _FILES_CAP}", "2"))
