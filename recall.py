@@ -248,6 +248,19 @@ def filter_here(records, here_cwd):
             if r["cwd"] == base or r["cwd"].startswith(base + "/")]
 
 
+def searchable_text(record, now):
+    """The text a query is matched against: the visible column + keyword tail
+    (same fields fzf searches), so --list filtering matches the picker."""
+    return " ".join(fzf_line(record, now).split("\t")[:2])
+
+
+def filter_query(records, now, query):
+    if not query:
+        return records
+    q = query.lower()
+    return [r for r in records if q in searchable_text(r, now).lower()]
+
+
 EXIT_ID = "__recall_exit__"
 
 
@@ -446,28 +459,49 @@ def run_picker(records, now, query=""):
         return 0
     by_id = {r["session_id"]: r for r in records}
     preview_dir = tempfile.mkdtemp(prefix="recall-preview-")
-    for r in records:
-        with open(os.path.join(preview_dir, r["session_id"]), "w", encoding="utf-8") as f:
-            f.write(preview_text(r, now))
-    with open(os.path.join(preview_dir, EXIT_ID), "w", encoding="utf-8") as f:
-        f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
-    lines = "\n".join([_exit_line()] + [fzf_line(r, now) for r in records])
-    cmd = [
-        "fzf", "--exact", "--delimiter=\t", "--with-nth=1,2",
-        "--preview", f"cat {preview_dir}/{{3}}",
-        "--preview-window=right,55%,wrap",
-        "--header", "Enter 恢复 · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
-        "--prompt=recall> ", "--query", query,
-    ]
-    proc = subprocess.run(cmd, input=lines, text=True, stdout=subprocess.PIPE)
-    sid, _ = parse_selection(proc.stdout)
+    try:
+        for r in records:
+            with open(os.path.join(preview_dir, r["session_id"]), "w", encoding="utf-8") as f:
+                f.write(preview_text(r, now))
+        with open(os.path.join(preview_dir, EXIT_ID), "w", encoding="utf-8") as f:
+            f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
+        lines = "\n".join([_exit_line()] + [fzf_line(r, now) for r in records])
+        cmd = [
+            "fzf", "--exact", "--delimiter=\t", "--with-nth=1,2",
+            "--preview", f"cat {preview_dir}/{{3}}",
+            "--preview-window=right,55%,wrap",
+            "--header", "Enter 恢复 · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
+            "--prompt=recall> ", "--query", query,
+        ]
+        proc = subprocess.run(cmd, input=lines, text=True, stdout=subprocess.PIPE)
+        sid, _ = parse_selection(proc.stdout)
+    finally:
+        # remove here so it's gone even when resume() replaces the process via execvp
+        shutil.rmtree(preview_dir, ignore_errors=True)
     if sid and sid != EXIT_ID and sid in by_id:
         return resume(by_id[sid])
     return 0
 
 
+_USAGE = """\
+recall — find and resume lost Claude Code sessions across all projects.
+
+  recall              fuzzy picker over all projects (needs fzf)
+  recall <query>      open the picker with the search box pre-filled
+  recall . | --here   only sessions from the current git repo / dir
+  recall --list       plain ranked table (also the no-fzf fallback); accepts a query
+  recall --help       show this help
+
+In the picker: type to search (prompts, branches, project, title); Enter resumes
+(cd + claude -r); Esc/Ctrl-C or the ✕ row quits.
+"""
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if "--help" in argv or "-h" in argv:
+        sys.stdout.write(_USAGE)
+        return 0
     here = "--here" in argv or "." in argv
     list_mode = "--list" in argv
     query = " ".join(a for a in argv if not a.startswith("-") and a != ".")
@@ -480,7 +514,7 @@ def main(argv=None):
     if list_mode or not shutil.which("fzf"):
         if not list_mode:
             sys.stderr.write("fzf 未安装，降级为列表。安装: brew install fzf\n")
-        run_list(records, now, sys.stdout)
+        run_list(filter_query(records, now, query), now, sys.stdout)
         return 0
     return run_picker(records, now, query)
 

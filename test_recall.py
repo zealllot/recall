@@ -519,6 +519,48 @@ class ExitRowTest(unittest.TestCase):
         self.assertTrue(recall.EXIT_ID.startswith("__"))
 
 
+class FilterQueryTest(unittest.TestCase):
+    NOW = 1_000_000
+
+    def test_matches_branch_keyword_case_insensitive(self):
+        hit = sample_record(
+            projects=[{"name": "mcd-website", "path": "/p", "count": 9,
+                       "branches": [{"name": "mdx-add-nutrition", "count": 9}]}])
+        miss = sample_record(
+            cwd="/x/other", prompts=["hello world"], ai_title="Something else",
+            projects=[{"name": "other", "path": "/x/other", "count": 3,
+                       "branches": [{"name": "main", "count": 3}]}])
+        out = recall.filter_query([hit, miss], self.NOW, "NUTRITION")
+        self.assertIn(hit, out)
+        self.assertNotIn(miss, out)
+
+    def test_empty_query_returns_all(self):
+        recs = [sample_record()]
+        self.assertEqual(recall.filter_query(recs, self.NOW, ""), recs)
+
+
+class RunPickerCleanupTest(unittest.TestCase):
+    def test_removes_preview_dir_even_when_nothing_selected(self):
+        created = {}
+        real_mkdtemp = recall.tempfile.mkdtemp
+        real_run = recall.subprocess.run
+
+        def spy_mkdtemp(*a, **k):
+            d = real_mkdtemp(*a, **k)
+            created["dir"] = d
+            return d
+
+        recall.tempfile.mkdtemp = spy_mkdtemp
+        recall.subprocess.run = lambda *a, **k: type("P", (), {"stdout": ""})()
+        try:
+            rc = recall.run_picker([sample_record()], 1_000_000)
+        finally:
+            recall.tempfile.mkdtemp = real_mkdtemp
+            recall.subprocess.run = real_run
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.exists(created["dir"]))  # cleaned up
+
+
 class RunListTest(unittest.TestCase):
     def test_emits_copyable_resume_command_per_record(self):
         out = io.StringIO()

@@ -21,7 +21,8 @@ brew install fzf      # for the interactive picker (optional; falls back to --li
 recall            # all projects, fuzzy picker
 recall 时区       # preseed the search query
 recall .          # only sessions from the current git repo / dir  (or --here)
-recall --list     # plain ranked table (also the no-fzf fallback)
+recall --list     # plain ranked table (also the no-fzf fallback); accepts a query
+recall --help     # usage
 ```
 
 In the picker: type to search across the whole prompt trail, the right pane
