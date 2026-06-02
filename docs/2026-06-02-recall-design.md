@@ -114,20 +114,20 @@ prompt.
 **Preview pane** (read from cache, no recompute):
 
 ```
-mcd-website  ·  2小时前  ·  64 条消息
-分支(末次·可能已被部署切走): master
-标题: Review Slack requirement and create plan
+webapp  ·  2小时前  ·  64 条消息
+分支(末次·可能已被部署切走): main
+标题: Review feature request and plan
 
 ── Prompt 轨迹 (最近在最下) ──
 · 看下这个需求 你规划一下
 · 都OK 写spec
-· 解决一下 PR#1114 冲突
-· 填了日本时间显示0时区
-▶ 帮我部署 prod PR#1114
+· 解决一下 PR#42 冲突
+· 表单时区显示不对
+▶ 帮我部署 staging PR#42
 
 ── 上次干到哪 (现算·不调模型) ──
-Claude 末回复: 已触发 prod 部署，workflow 运行中，等 CI…
-改过的文件: scheduler.go · schedule_test.go · cmd/mcd-republish/main.go
+Claude 末回复: 已触发 staging 部署，workflow 运行中，等 CI…
+改过的文件: scheduler.go · scheduler_test.go · cmd/worker/main.go
 ```
 
 **On Enter**: parse session id + cwd from the selected line, `chdir(cwd)`,

@@ -65,7 +65,7 @@ class IsJunkTest(unittest.TestCase):
         self.assertFalse(recall.is_junk("/proctor fix the failing test"))
 
     def test_keeps_substantive_prompt(self):
-        self.assertFalse(recall.is_junk("帮我部署 prod PR#1114"))
+        self.assertFalse(recall.is_junk("帮我部署 staging PR#42"))
         self.assertFalse(recall.is_junk("filled JST but page shows UTC"))
 
 
@@ -267,11 +267,11 @@ def sample_record(**over):
     rec = {
         "session_id": SID,
         "path": "/x/" + SID + ".jsonl",
-        "cwd": "/Users/me/go/src/github.com/theplant/mcd-website",
-        "projects": [{"name": "mcd-website", "path": "/p", "count": 64,
+        "cwd": "/Users/me/go/src/github.com/acme/webapp",
+        "projects": [{"name": "webapp", "path": "/p", "count": 64,
                       "branches": [{"name": "release-test", "count": 64}]}],
         "ai_title": "Review requirement",
-        "prompts": ["看下这个需求", "填了日本时间显示0时区", "帮我部署 prod"],
+        "prompts": ["看下这个需求", "表单时区显示不对", "帮我部署 prod"],
         "files_changed": ["/repo/scheduler.go", "/repo/sub/schedule_test.go"],
         "last_assistant": "已触发 prod 部署，等 CI…",
         "mtime": 999_000,
@@ -314,8 +314,8 @@ class RenderTest(unittest.TestCase):
     NOW = 1_000_000
 
     def test_project_short_is_cwd_basename(self):
-        self.assertEqual(recall.project_short("/a/b/mcd-website"), "mcd-website")
-        self.assertEqual(recall.project_short("/a/b/mcd-website/"), "mcd-website")
+        self.assertEqual(recall.project_short("/a/b/webapp"), "webapp")
+        self.assertEqual(recall.project_short("/a/b/webapp/"), "webapp")
 
     def test_last_prompt_display_uses_last_prompt(self):
         self.assertEqual(recall.last_prompt_display(sample_record()), "帮我部署 prod")
@@ -328,21 +328,21 @@ class RenderTest(unittest.TestCase):
         line = recall.fzf_line(sample_record(), self.NOW)
         sid, cwd = recall.parse_selection(line)
         self.assertEqual(sid, SID)
-        self.assertEqual(cwd, "/Users/me/go/src/github.com/theplant/mcd-website")
+        self.assertEqual(cwd, "/Users/me/go/src/github.com/acme/webapp")
 
     def test_fzf_line_keeps_id_and_cwd_in_unsearched_tail_fields(self):
         # fields 3,4 carry id/cwd; --with-nth=1,2 keeps them off display/search
         fields = recall.fzf_line(sample_record(), self.NOW).split("\t")
         self.assertEqual(len(fields), 4)
         self.assertEqual(fields[2], SID)
-        self.assertEqual(fields[3], "/Users/me/go/src/github.com/theplant/mcd-website")
+        self.assertEqual(fields[3], "/Users/me/go/src/github.com/acme/webapp")
 
     def test_fzf_line_visible_columns_are_padded_for_alignment(self):
         fields = recall.fzf_line(sample_record(), self.NOW).split("\t")
         # reltime padded to a fixed display width before the project column
         self.assertTrue(fields[0].startswith(recall._pad(
             recall.relative_time(999_000, self.NOW), recall._TIME_COL)))
-        self.assertIn("mcd-website", fields[0])
+        self.assertIn("webapp", fields[0])
         self.assertIn("帮我部署 prod", fields[0])  # last prompt lives in the visible col
 
     def test_fzf_line_search_field_contains_whole_trail(self):
@@ -353,15 +353,15 @@ class RenderTest(unittest.TestCase):
     def test_fzf_line_search_includes_branch_and_title_not_redundant_project(self):
         rec = sample_record(
             ai_title="Add parent nutrition field",
-            projects=[{"name": "mcd-website", "path": "/p", "count": 9,
-                       "branches": [{"name": "mdx-12752-add-parent-nutrition-field",
+            projects=[{"name": "webapp", "path": "/p", "count": 9,
+                       "branches": [{"name": "feat-add-nutrition-field",
                                      "count": 9}]}])
         fields = recall.fzf_line(rec, self.NOW).split("\t")
         searchable = " ".join(fields[:2])
         self.assertIn("nutrition", searchable)          # branch name searchable
         self.assertIn("Add parent nutrition", searchable)  # ai title searchable
-        self.assertNotIn("mcd-website", fields[1])      # not duplicated into keyword tail
-        self.assertIn("mcd-website", fields[0])         # already in the visible column
+        self.assertNotIn("webapp", fields[1])      # not duplicated into keyword tail
+        self.assertIn("webapp", fields[0])         # already in the visible column
 
     def test_fzf_line_sanitizes_tabs_and_newlines(self):
         rec = sample_record(prompts=["line1\twith\ttabs\nand newline"])
@@ -371,7 +371,7 @@ class RenderTest(unittest.TestCase):
 
     def test_preview_contains_key_sections(self):
         out = recall.preview_text(sample_record(), self.NOW)
-        self.assertIn("mcd-website", out)
+        self.assertIn("webapp", out)
         self.assertIn("release-test", out)            # branch shown
         self.assertIn("Review requirement", out)      # ai title
         self.assertIn("帮我部署 prod", out)             # trail
@@ -524,8 +524,8 @@ class FilterQueryTest(unittest.TestCase):
 
     def test_matches_branch_keyword_case_insensitive(self):
         hit = sample_record(
-            projects=[{"name": "mcd-website", "path": "/p", "count": 9,
-                       "branches": [{"name": "mdx-add-nutrition", "count": 9}]}])
+            projects=[{"name": "webapp", "path": "/p", "count": 9,
+                       "branches": [{"name": "feat-add-nutrition", "count": 9}]}])
         miss = sample_record(
             cwd="/x/other", prompts=["hello world"], ai_title="Something else",
             projects=[{"name": "other", "path": "/x/other", "count": 3,
@@ -567,7 +567,7 @@ class RunListTest(unittest.TestCase):
         recall.run_list([sample_record()], 1_000_000, out)
         text = out.getvalue()
         self.assertIn("claude -r " + SID, text)
-        self.assertIn("mcd-website", text)
+        self.assertIn("webapp", text)
         self.assertIn("帮我部署 prod", text)
 
     def test_empty_records_prints_friendly_message(self):
