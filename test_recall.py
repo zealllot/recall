@@ -311,12 +311,18 @@ class RenderTest(unittest.TestCase):
         rec = sample_record(prompts=[])
         self.assertEqual(recall.last_prompt_display(rec), "Review requirement")
 
-    def test_fzf_line_has_six_tab_fields_with_id_and_cwd(self):
+    def test_fzf_line_recovers_id_and_cwd_via_parse_selection(self):
         line = recall.fzf_line(sample_record(), self.NOW)
-        fields = line.split("\t")
-        self.assertEqual(len(fields), 6)
-        self.assertEqual(fields[4], SID)
-        self.assertEqual(fields[5], "/Users/me/go/src/github.com/theplant/mcd-website")
+        sid, cwd = recall.parse_selection(line)
+        self.assertEqual(sid, SID)
+        self.assertEqual(cwd, "/Users/me/go/src/github.com/theplant/mcd-website")
+
+    def test_fzf_line_hides_blob_id_cwd_with_ansi_conceal(self):
+        line = recall.fzf_line(sample_record(), self.NOW)
+        # visible prefix (time/proj/last) carries no conceal code; the rest does
+        self.assertIn("\x1b[8m", line)
+        self.assertTrue(line.endswith("\x1b[0m"))
+        self.assertNotIn("\x1b", line.split("\t")[0])  # reltime stays clean
 
     def test_fzf_line_search_field_contains_whole_trail(self):
         line = recall.fzf_line(sample_record(), self.NOW)
