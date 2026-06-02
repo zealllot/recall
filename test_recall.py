@@ -447,6 +447,17 @@ class RenderTest(unittest.TestCase):
         main_line = next(l for l in lines if "main" in l and "4000" in l)
         self.assertTrue(main_line.startswith("    "))
 
+    def test_preview_color_is_additive_only(self):
+        rec = sample_record(projects=[
+            {"name": "a", "path": "/a", "count": 5,
+             "branches": [{"name": "x", "count": 3}, {"name": "y", "count": 2}]},
+            {"name": "b", "path": "/b", "count": 2,
+             "branches": [{"name": "main", "count": 2}]}])
+        colored = recall.preview_text(rec, self.NOW, live_pid=99, color=True)
+        plain = recall.preview_text(rec, self.NOW, live_pid=99, color=False)
+        self.assertIn("\x1b[", colored)                       # has ANSI codes
+        self.assertEqual(recall._strip_ansi(colored), plain)  # but only wrapping
+
     def test_preview_caps_long_trail(self):
         rec = sample_record(prompts=[f"p{i}" for i in range(20)])
         out = recall.preview_text(rec, self.NOW)

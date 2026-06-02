@@ -167,50 +167,66 @@ def fzf_line(record, now, live_ids=()):
     return "\t".join([visible, keywords, record["session_id"], record["cwd"]])
 
 
-def _branch_section(projects):
+def _c(s, code, on):
+    """Wrap s in an ANSI SGR code when `on` (fzf's preview renders ANSI)."""
+    return f"\x1b[{code}m{s}\x1b[0m" if on else s
+
+
+def _branch_section(projects, color=False):
     """Render the project/branch block. One project -> just its branches;
     several -> a project→branch tree. ★ marks the most-active at each level."""
     if not projects:
         return []
+    star = _c("★", "33", color)  # yellow
+
+    def line(indent, marker_is_star, name, count):
+        marker = star if marker_is_star else "·"
+        return f"{indent}{marker} {name} ({count})"
+
     if len(projects) == 1:
         branches = projects[0]["branches"]
         if not branches:
             return []
         if len(branches) == 1:
-            return [f"分支: {branches[0]['name']}"]
-        out = ["分支 (★=对话最多):"]
-        for j, b in enumerate(branches):
-            out.append(f"  {'★' if j == 0 else '·'} {b['name']} ({b['count']})")
+            return [_c("分支:", "36", color) + f" {branches[0]['name']}"]
+        out = [_c("分支 (★=对话最多):", "36", color)]
+        out += [line("  ", j == 0, b["name"], b["count"])
+                for j, b in enumerate(branches)]
         return out
-    out = ["项目/分支 (★=对话最多):"]
+    out = [_c("项目/分支 (★=对话最多):", "36", color)]
     for i, p in enumerate(projects):
-        out.append(f"{'★' if i == 0 else '·'} {p['name']} ({p['count']})")
-        for j, b in enumerate(p["branches"]):
-            out.append(f"    {'★' if j == 0 else '·'} {b['name']} ({b['count']})")
+        out.append(line("", i == 0, _c(p["name"], "1", color), p["count"]))
+        out += [line("    ", j == 0, b["name"], b["count"])
+                for j, b in enumerate(p["branches"])]
     return out
 
 
-def preview_text(record, now, live_pid=None):
-    out = [f"{project_short(record['cwd'])}  ·  "
-           f"{relative_time(int(record['mtime']), now)}  ·  "
-           f"{record['msg_count']} 条消息"]
+def preview_text(record, now, live_pid=None, color=False):
+    c = lambda s, code: _c(s, code, color)
+    out = [c(project_short(record["cwd"]), "1;36") + "  ·  "
+           + c(relative_time(int(record["mtime"]), now), "2") + "  ·  "
+           + c(f"{record['msg_count']} 条消息", "2")]
     if live_pid:
-        out.append(f"● 运行中 (pid {live_pid}) — Enter 跳到该窗口")
-    out += _branch_section(record.get("projects") or [])
+        out.append(c(f"● 运行中 (pid {live_pid}) — Enter 跳到该窗口", "32"))
+    out += _branch_section(record.get("projects") or [], color)
     if record.get("ai_title"):
-        out.append(f"标题: {record['ai_title']}")
-    out += ["", "── Prompt 轨迹 (最近在最下) ──"]
+        out.append(c("标题:", "2") + f" {record['ai_title']}")
+    out += ["", c("── Prompt 轨迹 (最近在最下) ──", "36")]
     prompts = record["prompts"]
     overflow = len(prompts) - _TRAIL_CAP
     if overflow > 0:
-        out.append(f"  … +{overflow} 更早")
+        out.append(c(f"  … +{overflow} 更早", "2"))
     shown = prompts[-_TRAIL_CAP:]
     for i, p in enumerate(shown):
-        marker = "▶" if i == len(shown) - 1 else "·"
-        out.append(f"{marker} {_truncate_cols(p, _TRAIL_COLS)}")
-    out += ["", "── 上次干到哪 (现算·不调模型) ──"]
+        text = _truncate_cols(p, _TRAIL_COLS)
+        if i == len(shown) - 1:
+            out.append(c(f"▶ {text}", "1;32"))  # most recent: bold green
+        else:
+            out.append(f"· {text}")
+    out += ["", c("── 上次干到哪 (现算·不调模型) ──", "36")]
     if record.get("last_assistant"):
-        out.append(f"Claude 末回复: {_truncate_cols(record['last_assistant'], _ASSIST_COLS)}")
+        out.append(c("Claude 末回复:", "2")
+                   + f" {_truncate_cols(record['last_assistant'], _ASSIST_COLS)}")
     if record.get("files_changed"):
         seen, names = set(), []
         for f in record["files_changed"]:
@@ -218,11 +234,10 @@ def preview_text(record, now, live_pid=None):
             if b not in seen:
                 seen.add(b)
                 names.append(b)
-        out.append(f"改过的文件 ({len(names)}):")
-        for n in names[:_FILES_CAP]:
-            out.append(f"  · {n}")
+        out.append(c(f"改过的文件 ({len(names)}):", "36"))
+        out += [f"  · {n}" for n in names[:_FILES_CAP]]
         if len(names) > _FILES_CAP:
-            out.append(f"  … +{len(names) - _FILES_CAP}")
+            out.append(c(f"  … +{len(names) - _FILES_CAP}", "2"))
     return "\n".join(out)
 
 
@@ -543,7 +558,7 @@ def run_picker(records, now, query=""):
     try:
         for r in records:
             with open(os.path.join(preview_dir, r["session_id"]), "w", encoding="utf-8") as f:
-                f.write(preview_text(r, now, live.get(r["session_id"])))
+                f.write(preview_text(r, now, live.get(r["session_id"]), color=True))
         with open(os.path.join(preview_dir, EXIT_ID), "w", encoding="utf-8") as f:
             f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
         lines = "\n".join([_exit_line()] + [fzf_line(r, now, live_ids) for r in records])
