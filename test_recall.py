@@ -368,6 +368,21 @@ class ParseSelectionTest(unittest.TestCase):
         self.assertEqual(recall.parse_selection(""), (None, None))
 
 
+class ExitRowTest(unittest.TestCase):
+    def test_exit_line_parses_to_exit_sentinel(self):
+        sid, _ = recall.parse_selection(recall._exit_line())
+        self.assertEqual(sid, recall.EXIT_ID)
+
+    def test_exit_line_is_searchable_by_exit_and_quit(self):
+        line = recall._exit_line()
+        for kw in ("exit", "quit", "退出"):
+            self.assertIn(kw, line)
+
+    def test_exit_sentinel_is_not_a_real_session_id(self):
+        # so a chosen exit row never matches a real record
+        self.assertTrue(recall.EXIT_ID.startswith("__"))
+
+
 class RunListTest(unittest.TestCase):
     def test_emits_copyable_resume_command_per_record(self):
         out = io.StringIO()

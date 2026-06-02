@@ -26,7 +26,8 @@ recall --list     # plain ranked table (also the no-fzf fallback)
 
 In the picker: type to search across the whole prompt trail, the right pane
 previews the trail + last assistant reply + files changed, `Enter` does
-`cd <cwd> && claude -r <id>`.
+`cd <cwd> && claude -r <id>`. To quit without resuming: press `Esc` / `Ctrl-C`,
+or type `exit` and pick the `✕ 退出` row.
 
 ## How it works
 

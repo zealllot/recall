@@ -145,6 +145,15 @@ def filter_here(records, here_cwd):
             if r["cwd"] == base or r["cwd"].startswith(base + "/")]
 
 
+EXIT_ID = "__recall_exit__"
+
+
+def _exit_line():
+    """A sentinel picker row: choosing it quits without resuming anything."""
+    return "\t".join(["", "✕", "退出 (exit / quit) — 不恢复任何 session",
+                      "exit quit 退出 q", EXIT_ID, ""])
+
+
 def parse_selection(line):
     """Inverse of fzf_line: pull (session_id, cwd) out of a chosen row."""
     fields = line.rstrip("\n").split("\t")
@@ -337,16 +346,19 @@ def run_picker(records, now, query=""):
     for r in records:
         with open(os.path.join(preview_dir, r["session_id"]), "w", encoding="utf-8") as f:
             f.write(preview_text(r, now))
-    lines = "\n".join(fzf_line(r, now) for r in records)
+    with open(os.path.join(preview_dir, EXIT_ID), "w", encoding="utf-8") as f:
+        f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
+    lines = "\n".join([_exit_line()] + [fzf_line(r, now) for r in records])
     cmd = [
         "fzf", "--delimiter=\t", "--with-nth=1,2,3",
         "--preview", f"cat {preview_dir}/{{5}}",
         "--preview-window=right,55%,wrap",
+        "--header", "Enter 恢复 · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
         "--prompt=recall> ", "--query", query,
     ]
     proc = subprocess.run(cmd, input=lines, text=True, stdout=subprocess.PIPE)
     sid, _ = parse_selection(proc.stdout)
-    if sid and sid in by_id:
+    if sid and sid != EXIT_ID and sid in by_id:
         return resume(by_id[sid])
     return 0
 
