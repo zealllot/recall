@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""recall — find and resume lost Claude Code sessions across all projects."""
+
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
+CACHE_PATH = os.path.expanduser("~/.claude/.recall-cache.json")
+
+_ACK = {"ok", "y", "yes", "好", "嗯"}
+_FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def _snippet(text, limit=200):
+    s = " ".join(text.split())
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
+def _decode_project_dir(dirpath):
+    """Best-effort fallback: Claude encodes a cwd as the project dir name."""
+    name = os.path.basename(dirpath)
+    if name.startswith("-"):
+        return "/" + name[1:].replace("-", "/")
+    return dirpath
+
+
+_TRAIL_CAP = 12
+
+
+def _clean(s):
+    """Collapse all whitespace (tabs, newlines) so a value is safe in one TSV cell."""
+    return " ".join(str(s).split())
+
+
+def project_short(cwd):
+    return os.path.basename(cwd.rstrip("/")) or cwd
+
+
+def last_prompt_display(record):
+    if record["prompts"]:
+        return record["prompts"][-1]
+    return record.get("ai_title") or "(无 prompt)"
+
+
+def fzf_line(record, now):
+    """One tab-delimited row: 3 visible cells + hidden trail/id/cwd for search & action."""
+    reltime = relative_time(int(record["mtime"]), now)
+    proj = project_short(record["cwd"])
+    last = _clean(last_prompt_display(record))
+    trail = _clean(" / ".join(record["prompts"]))
+    return "\t".join([reltime, proj, last, trail, record["session_id"], record["cwd"]])
+
+
+def preview_text(record, now):
+    out = [f"{project_short(record['cwd'])}  ·  "
+           f"{relative_time(int(record['mtime']), now)}  ·  "
+           f"{record['msg_count']} 条消息"]
+    if record.get("branch"):
+        out.append(f"分支(末次·可能已被部署切走): {record['branch']}")
+    if record.get("ai_title"):
+        out.append(f"标题: {record['ai_title']}")
+    out += ["", "── Prompt 轨迹 (最近在最下) ──"]
+    prompts = record["prompts"]
+    overflow = len(prompts) - _TRAIL_CAP
+    if overflow > 0:
+        out.append(f"  … +{overflow} 更早")
+    shown = prompts[-_TRAIL_CAP:]
+    for i, p in enumerate(shown):
+        marker = "▶" if i == len(shown) - 1 else "·"
+        out.append(f"{marker} {_clean(p)}")
+    out += ["", "── 上次干到哪 (现算·不调模型) ──"]
+    if record.get("last_assistant"):
+        out.append(f"Claude 末回复: {record['last_assistant']}")
+    if record.get("files_changed"):
+        seen, names = set(), []
+        for f in record["files_changed"]:
+            b = os.path.basename(f)
+            if b not in seen:
+                seen.add(b)
+                names.append(b)
+        out.append(f"改过的文件: {' · '.join(names[:10])}")
+    return "\n".join(out)
+
+
+def cache_load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def cache_save(path, cache):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def filter_here(records, here_cwd):
+    base = here_cwd.rstrip("/")
+    return [r for r in records
+            if r["cwd"] == base or r["cwd"].startswith(base + "/")]
+
+
+def parse_selection(line):
+    """Inverse of fzf_line: pull (session_id, cwd) out of a chosen row."""
+    fields = line.rstrip("\n").split("\t")
+    if len(fields) < 6:
+        return (None, None)
+    return (fields[4], fields[5])
+
+
+def run_list(records, now, out):
+    if not records:
+        out.write("没有找到任何 session\n")
+        return
+    for r in records:
+        out.write(f"cd {r['cwd']} && claude -r {r['session_id']}"
+                  f"   # {relative_time(int(r['mtime']), now)} · "
+                  f"{project_short(r['cwd'])} · {_clean(last_prompt_display(r))}\n")
+
+
+def build_index(paths, cache, extract_fn=None):
+    """Return (records sorted newest-first, fresh cache).
+
+    Reuse a cached record when the file's mtime is unchanged; re-extract on
+    change; drop cache entries whose file is gone.
+    """
+    extract_fn = extract_fn or extract
+    new_cache = {}
+    items = []  # (mtime, record)
+    for path in paths:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        entry = cache.get(path)
+        if entry and entry.get("mtime") == mtime:
+            record = entry.get("record")
+        else:
+            record = extract_fn(path)
+        new_cache[path] = {"mtime": mtime, "record": record}
+        if record is not None:
+            items.append((mtime, record))
+    items.sort(key=lambda it: it[0], reverse=True)
+    return [r for _, r in items], new_cache
+
+
+def extract(path):
+    """Parse a session JSONL file into one record dict, or None if it's empty."""
+    cwd = branch = ai_title = last_assistant = None
+    prompts, files, seen = [], [], set()
+    msg_count = 0
+    try:
+        f = open(path, encoding="utf-8")
+    except OSError:
+        return None
+    with f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            t = d.get("type")
+            if t == "last-prompt":
+                p = d.get("lastPrompt")
+                if isinstance(p, str) and not is_junk(p):
+                    p = p.strip()
+                    if not prompts or prompts[-1] != p:  # collapse re-emitted dupes
+                        prompts.append(p)
+                continue
+            if t == "ai-title":
+                if d.get("aiTitle"):
+                    ai_title = d["aiTitle"]
+                continue
+            if cwd is None and d.get("cwd"):
+                cwd = d["cwd"]
+            if d.get("gitBranch"):
+                branch = d["gitBranch"]
+            if t in ("user", "assistant"):
+                msg_count += 1
+            if t == "assistant":
+                for b in ((d.get("message") or {}).get("content") or []):
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "text":
+                        txt = (b.get("text") or "").strip()
+                        if txt:
+                            last_assistant = _snippet(txt)
+                    elif b.get("type") == "tool_use" and b.get("name") in _FILE_TOOLS:
+                        fp = (b.get("input") or {}).get("file_path")
+                        if fp and fp not in seen:
+                            seen.add(fp)
+                            files.append(fp)
+
+    if cwd is None and not prompts and ai_title is None and \
+            last_assistant is None and msg_count == 0:
+        return None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    if cwd is None:
+        cwd = _decode_project_dir(os.path.dirname(path))
+    stem = os.path.basename(path)
+    if stem.endswith(".jsonl"):
+        stem = stem[:-len(".jsonl")]
+    return {
+        "session_id": stem,
+        "path": os.path.abspath(path),
+        "cwd": cwd,
+        "branch": branch,
+        "ai_title": ai_title,
+        "prompts": prompts,
+        "files_changed": files[:20],
+        "last_assistant": last_assistant,
+        "mtime": mtime,
+        "msg_count": msg_count,
+    }
+
+
+def relative_time(ts, now):
+    """Human relative time in Chinese; older than a week falls back to MM-DD."""
+    delta = now - ts
+    if delta < 60:
+        return "刚刚"
+    if delta < 3600:
+        return f"{delta // 60}分钟前"
+    if delta < 86400:
+        return f"{delta // 3600}小时前"
+    if delta < 172800:
+        return "昨天"
+    if delta < 604800:
+        return f"{delta // 86400}天前"
+    return time.strftime("%m-%d", time.localtime(ts))
+
+
+def is_junk(prompt):
+    """True if a prompt carries no recognizable intent and should be skipped."""
+    p = prompt.strip()
+    if len(p) < 2:
+        return True
+    if p.isdigit():
+        return True
+    if p.lower() in _ACK:
+        return True
+    if p.startswith("/") and not any(c.isspace() for c in p):
+        return True
+    return False
+
+
+def session_paths(projects_root=PROJECTS_ROOT):
+    return glob.glob(os.path.join(projects_root, "*", "*.jsonl"))
+
+
+def index(projects_root=PROJECTS_ROOT, cache_path=CACHE_PATH):
+    records, new_cache = build_index(session_paths(projects_root), cache_load(cache_path))
+    cache_save(cache_path, new_cache)
+    return records
+
+
+def _here_root():
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=2)
+        if top.returncode == 0 and top.stdout.strip():
+            return top.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return os.getcwd()
+
+
+def resume(record):
+    """cd into the session's cwd and hand off to `claude -r`; warn if cwd is gone."""
+    cwd, sid = record["cwd"], record["session_id"]
+    if not os.path.isdir(cwd):
+        sys.stderr.write(f"原目录已不存在，无法原地恢复: {cwd}\n"
+                         f"transcript: {record['path']}\n")
+        return 1
+    os.chdir(cwd)
+    os.execvp("claude", ["claude", "-r", sid])
+
+
+def run_picker(records, now, query=""):
+    if not records:
+        sys.stderr.write("没有找到任何 session\n")
+        return 0
+    by_id = {r["session_id"]: r for r in records}
+    preview_dir = tempfile.mkdtemp(prefix="recall-preview-")
+    for r in records:
+        with open(os.path.join(preview_dir, r["session_id"]), "w", encoding="utf-8") as f:
+            f.write(preview_text(r, now))
+    lines = "\n".join(fzf_line(r, now) for r in records)
+    cmd = [
+        "fzf", "--delimiter=\t", "--with-nth=1,2,3",
+        "--preview", f"cat {preview_dir}/{{5}}",
+        "--preview-window=right,55%,wrap",
+        "--prompt=recall> ", "--query", query,
+    ]
+    proc = subprocess.run(cmd, input=lines, text=True, stdout=subprocess.PIPE)
+    sid, _ = parse_selection(proc.stdout)
+    if sid and sid in by_id:
+        return resume(by_id[sid])
+    return 0
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    here = "--here" in argv or "." in argv
+    list_mode = "--list" in argv
+    query = " ".join(a for a in argv if not a.startswith("-") and a != ".")
+    now = int(time.time())
+
+    records = index()
+    if here:
+        records = filter_here(records, _here_root())
+
+    if list_mode or not shutil.which("fzf"):
+        if not list_mode:
+            sys.stderr.write("fzf 未安装，降级为列表。安装: brew install fzf\n")
+        run_list(records, now, sys.stdout)
+        return 0
+    return run_picker(records, now, query)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
