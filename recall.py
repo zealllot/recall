@@ -179,6 +179,7 @@ def _decode_project_dir(dirpath):
 
 
 _TRAIL_CAP = 12
+_HEAD_COLS = 160    # headline gets ~2 preview lines (fuller than the list column)
 _TRAIL_COLS = 68    # one display line per prompt in the preview pane
 _ASSIST_COLS = 140  # ~two lines for the last assistant reply
 _FILES_CAP = 8
@@ -299,8 +300,11 @@ def _branch_section(projects, color=False):
 
 def preview_text(record, now, live_pid=None, color=False):
     c = lambda s, code: _c(s, code, color)
-    out = [c(project_short(record["cwd"]), "1;36") + "  ·  "
-           + c(t("msgs", record["msg_count"]), "2")]
+    # lead with the first prompt as a bold, bright title — shown fuller than in
+    # the (narrow) list column. Terminals can't truly enlarge the font.
+    out = [c(_truncate_cols(headline(record), _HEAD_COLS), "1;97")]
+    out.append(c(project_short(record["cwd"]), "1;36") + "  ·  "
+               + c(t("msgs", record["msg_count"]), "2"))
     when = []
     if record.get("started"):
         when.append(f"{t('started')} {abs_time(record['started'])}")

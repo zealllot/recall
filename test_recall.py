@@ -383,6 +383,15 @@ class RenderTest(unittest.TestCase):
     def test_abs_time_formats_local_datetime(self):
         self.assertRegex(recall.abs_time(990_000), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 
+    def test_preview_leads_with_headline(self):
+        out = recall.preview_text(sample_record(), self.NOW)
+        self.assertIn("看下这个需求", out.splitlines()[0])  # first prompt, top line
+
+    def test_preview_headline_is_emphasized_when_colored(self):
+        out = recall.preview_text(sample_record(), self.NOW, color=True)
+        first = out.splitlines()[0]
+        self.assertIn("\x1b[1", first)  # bold
+
     def test_preview_shows_started_and_last_active(self):
         out = recall.preview_text(sample_record(started=990_000), self.NOW)
         self.assertIn("开始", out)                       # started label
