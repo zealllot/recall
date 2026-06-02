@@ -224,6 +224,22 @@ def sample_record(**over):
     return rec
 
 
+class TruncateColsTest(unittest.TestCase):
+    def test_short_string_unchanged(self):
+        self.assertEqual(recall._truncate_cols("abcdef", 100), "abcdef")
+
+    def test_collapses_whitespace(self):
+        self.assertEqual(recall._truncate_cols("a\tb\nc", 100), "a b c")
+
+    def test_ascii_truncated_with_ellipsis(self):
+        out = recall._truncate_cols("abcdefghij", 5)
+        self.assertEqual(out, "abcd…")  # 4 cols + ellipsis = 5
+
+    def test_cjk_counts_as_two_columns(self):
+        # cols=6 -> room for 2 wide chars (4 cols) then ellipsis
+        self.assertEqual(recall._truncate_cols("你好世界很长", 6), "你好…")
+
+
 class RenderTest(unittest.TestCase):
     NOW = 1_000_000
 
@@ -270,9 +286,22 @@ class RenderTest(unittest.TestCase):
     def test_preview_dedupes_repeated_basenames(self):
         rec = sample_record(files_changed=["/a/x.go", "/b/x.go", "/a/y.go"])
         out = recall.preview_text(rec, self.NOW)
-        files_line = next(l for l in out.splitlines() if l.startswith("改过的文件"))
-        self.assertEqual(files_line.count("x.go"), 1)
-        self.assertIn("y.go", files_line)
+        self.assertEqual(out.count("x.go"), 1)
+        self.assertIn("y.go", out)
+
+    def test_preview_files_listed_one_per_line(self):
+        rec = sample_record(files_changed=["/a/x.go", "/a/y.go"])
+        out = recall.preview_text(rec, self.NOW)
+        file_lines = [l for l in out.splitlines() if l.lstrip().startswith("·")
+                      and (".go" in l)]
+        self.assertEqual(len(file_lines), 2)
+
+    def test_preview_truncates_long_trail_item_to_one_line(self):
+        rec = sample_record(prompts=["这是一个非常长的提示句子" * 20])
+        out = recall.preview_text(rec, self.NOW)
+        trail = [l for l in out.splitlines() if l.startswith(("·", "▶"))]
+        self.assertEqual(len(trail), 1)
+        self.assertTrue(trail[0].endswith("…"))
 
     def test_preview_caps_long_trail(self):
         rec = sample_record(prompts=[f"p{i}" for i in range(20)])

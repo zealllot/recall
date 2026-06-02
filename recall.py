@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 
 PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 CACHE_PATH = os.path.expanduser("~/.claude/.recall-cache.json")
@@ -34,11 +35,33 @@ def _decode_project_dir(dirpath):
 
 
 _TRAIL_CAP = 12
+_TRAIL_COLS = 68    # one display line per prompt in the preview pane
+_ASSIST_COLS = 140  # ~two lines for the last assistant reply
+_FILES_CAP = 8
 
 
 def _clean(s):
     """Collapse all whitespace (tabs, newlines) so a value is safe in one TSV cell."""
     return " ".join(str(s).split())
+
+
+def _char_cols(c):
+    return 2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+
+
+def _truncate_cols(s, cols):
+    """Collapse whitespace and cut to a display-column budget (CJK = 2 cols)."""
+    s = _clean(s)
+    if sum(_char_cols(c) for c in s) <= cols:
+        return s
+    out, w = [], 0
+    for c in s:
+        cw = _char_cols(c)
+        if w + cw > cols - 1:  # leave one column for the ellipsis
+            break
+        out.append(c)
+        w += cw
+    return "".join(out) + "…"
 
 
 def project_short(cwd):
@@ -76,10 +99,10 @@ def preview_text(record, now):
     shown = prompts[-_TRAIL_CAP:]
     for i, p in enumerate(shown):
         marker = "▶" if i == len(shown) - 1 else "·"
-        out.append(f"{marker} {_clean(p)}")
+        out.append(f"{marker} {_truncate_cols(p, _TRAIL_COLS)}")
     out += ["", "── 上次干到哪 (现算·不调模型) ──"]
     if record.get("last_assistant"):
-        out.append(f"Claude 末回复: {record['last_assistant']}")
+        out.append(f"Claude 末回复: {_truncate_cols(record['last_assistant'], _ASSIST_COLS)}")
     if record.get("files_changed"):
         seen, names = set(), []
         for f in record["files_changed"]:
@@ -87,7 +110,11 @@ def preview_text(record, now):
             if b not in seen:
                 seen.add(b)
                 names.append(b)
-        out.append(f"改过的文件: {' · '.join(names[:10])}")
+        out.append(f"改过的文件 ({len(names)}):")
+        for n in names[:_FILES_CAP]:
+            out.append(f"  · {n}")
+        if len(names) > _FILES_CAP:
+            out.append(f"  … +{len(names) - _FILES_CAP}")
     return "\n".join(out)
 
 
