@@ -30,6 +30,11 @@ previews the trail + last assistant reply + files changed, `Enter` does
 `cd <cwd> && claude -r <id>`. To quit without resuming: press `Esc` / `Ctrl-C`,
 or type `exit` and pick the `✕ 退出` row.
 
+Sessions that are **currently running** (per `~/.claude/sessions/<pid>.json`) are
+marked with `●`. Picking one **jumps to its existing iTerm2 tab** (via AppleScript
++ tty match) instead of starting a duplicate `claude -r`. macOS + iTerm2 only;
+other terminals / tmux fall back to a normal resume.
+
 ## How it works
 
 Reads `~/.claude/projects/*/*.jsonl`, extracts the prompt trail, ai-title,

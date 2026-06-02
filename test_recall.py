@@ -339,11 +339,19 @@ class RenderTest(unittest.TestCase):
 
     def test_fzf_line_visible_columns_are_padded_for_alignment(self):
         fields = recall.fzf_line(sample_record(), self.NOW).split("\t")
-        # reltime padded to a fixed display width before the project column
-        self.assertTrue(fields[0].startswith(recall._pad(
+        # a 2-col marker slot, then reltime padded to a fixed display width
+        self.assertEqual(fields[0][:2], "  ")  # not live -> blank marker slot
+        self.assertTrue(fields[0][2:].startswith(recall._pad(
             recall.relative_time(999_000, self.NOW), recall._TIME_COL)))
         self.assertIn("webapp", fields[0])
         self.assertIn("帮我部署 prod", fields[0])  # last prompt lives in the visible col
+
+    def test_fzf_line_marks_live_session_keeping_marker_slot_width(self):
+        live = recall.fzf_line(sample_record(), self.NOW, live_ids={SID}).split("\t")
+        dead = recall.fzf_line(sample_record(), self.NOW, live_ids=set()).split("\t")
+        self.assertIn("●", live[0][:2])               # live -> dot in the marker slot
+        self.assertNotIn("●", dead[0])
+        self.assertEqual(len(live[0]), len(dead[0]))   # same width -> stays aligned
 
     def test_fzf_line_search_field_contains_whole_trail(self):
         searchable = " ".join(recall.fzf_line(sample_record(), self.NOW).split("\t")[:2])
@@ -537,6 +545,30 @@ class FilterQueryTest(unittest.TestCase):
     def test_empty_query_returns_all(self):
         recs = [sample_record()]
         self.assertEqual(recall.filter_query(recs, self.NOW, ""), recs)
+
+
+class LiveSessionsTest(unittest.TestCase):
+    def test_reports_only_alive_pid_sessions(self):
+        tmp = tempfile.mkdtemp()
+        with open(os.path.join(tmp, "a.json"), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": "alive-sid"}, f)
+        with open(os.path.join(tmp, "b.json"), "w") as f:
+            json.dump({"pid": 2_000_000_000, "sessionId": "dead-sid"}, f)
+        live = recall.live_sessions(tmp)
+        self.assertEqual(live.get("alive-sid"), os.getpid())
+        self.assertNotIn("dead-sid", live)
+
+    def test_missing_dir_is_empty(self):
+        self.assertEqual(recall.live_sessions("/no/such/dir"), {})
+
+
+class ResumeJumpTest(unittest.TestCase):
+    def test_jumps_to_window_when_session_is_live(self):
+        jumped = []
+        rc = recall.resume(sample_record(), live={SID: 4242},
+                           jump_fn=lambda pid: jumped.append(pid) or True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(jumped, [4242])  # jumped instead of spawning claude -r
 
 
 class RunPickerCleanupTest(unittest.TestCase):

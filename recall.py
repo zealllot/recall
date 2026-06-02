@@ -14,6 +14,7 @@ import unicodedata
 
 PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 CACHE_PATH = os.path.expanduser("~/.claude/.recall-cache.json")
+SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")  # live-process registry
 # Bump whenever extract()'s output shape or logic changes, so stale records
 # (cached under an unchanged file mtime) are invalidated and re-extracted.
 CACHE_VERSION = 4
@@ -144,17 +145,19 @@ def _strip_ansi(s):
 _TIME_COL, _PROJ_COL = 8, 16
 
 
-def fzf_line(record, now):
+def fzf_line(record, now, live_ids=()):
     """Four tab fields. fzf shows+searches 1 (an aligned time·proj·last column)
     and 2 (a search-only keyword tail) via --with-nth; 3 (id) and 4 (cwd) ride
     along for the action but aren't shown/searched. fzf can't search a field it
     doesn't show (and would reveal matches inside a hidden one anyway), so the
     keywords — branch names, ai-title, prompt trail — sit in field 2, which
-    normally scrolls off-screen and only surfaces a row when it matches."""
+    normally scrolls off-screen and only surfaces a row when it matches. A
+    leading 2-col slot marks sessions that are currently running (●)."""
     reltime = relative_time(int(record["mtime"]), now)
     proj = project_short(record["cwd"])
     last = _clean(last_prompt_display(record))
-    visible = f"{_pad(reltime, _TIME_COL)}  {_pad(proj, _PROJ_COL)}  {last}"
+    marker = "● " if record["session_id"] in live_ids else "  "
+    visible = f"{marker}{_pad(reltime, _TIME_COL)}  {_pad(proj, _PROJ_COL)}  {last}"
     kw = []  # project name is already searchable in `visible`, so omit it here
     for p in record.get("projects") or []:
         kw.extend(b["name"] for b in p["branches"])
@@ -187,10 +190,12 @@ def _branch_section(projects):
     return out
 
 
-def preview_text(record, now):
+def preview_text(record, now, live_pid=None):
     out = [f"{project_short(record['cwd'])}  ·  "
            f"{relative_time(int(record['mtime']), now)}  ·  "
            f"{record['msg_count']} 条消息"]
+    if live_pid:
+        out.append(f"● 运行中 (pid {live_pid}) — Enter 跳到该窗口")
     out += _branch_section(record.get("projects") or [])
     if record.get("ai_title"):
         out.append(f"标题: {record['ai_title']}")
@@ -421,6 +426,73 @@ def is_junk(prompt):
     return False
 
 
+def live_sessions(sessions_dir=SESSIONS_DIR):
+    """sessionId -> pid for sessions whose process is still running, read from
+    Claude Code's per-process registry (~/.claude/sessions/<pid>.json)."""
+    out = {}
+    for f in glob.glob(os.path.join(sessions_dir, "*.json")):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        pid, sid = d.get("pid"), d.get("sessionId")
+        if not pid or not sid:
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue          # dead
+        except PermissionError:
+            pass              # alive, just not ours
+        except OSError:
+            continue
+        out[sid] = pid
+    return out
+
+
+def _tty_of(pid):
+    try:
+        r = subprocess.run(["ps", "-o", "tty=", "-p", str(pid)],
+                           capture_output=True, text=True)
+    except OSError:
+        return None
+    t = r.stdout.strip()
+    return "/dev/" + t if t and t not in ("?", "??") else None
+
+
+_ITERM_JUMP = '''
+tell application "iTerm2"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s is "%s" then
+          select t
+          select s
+          activate
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return "notfound"
+end tell
+'''
+
+
+def jump_to_session(pid):
+    """Bring the iTerm2 tab running this pid to the front. True if it jumped."""
+    tty = _tty_of(pid)
+    if not tty:
+        return False
+    try:
+        r = subprocess.run(["osascript", "-e", _ITERM_JUMP % tty],
+                           capture_output=True, text=True)
+    except OSError:
+        return False
+    return r.stdout.strip() == "ok"
+
+
 def session_paths(projects_root=PROJECTS_ROOT):
     return glob.glob(os.path.join(projects_root, "*", "*.jsonl"))
 
@@ -442,9 +514,16 @@ def _here_root():
     return os.getcwd()
 
 
-def resume(record):
-    """cd into the session's cwd and hand off to `claude -r`; warn if cwd is gone."""
-    cwd, sid = record["cwd"], record["session_id"]
+def resume(record, live=None, jump_fn=jump_to_session):
+    """If the session is already running, jump to its window instead of starting
+    a duplicate; otherwise cd into its cwd and hand off to `claude -r`."""
+    sid = record["session_id"]
+    if live is None:
+        live = live_sessions()
+    if sid in live and jump_fn(live[sid]):
+        sys.stderr.write(f"已跳到正在运行的窗口 (pid {live[sid]})\n")
+        return 0
+    cwd = record["cwd"]
     if not os.path.isdir(cwd):
         sys.stderr.write(f"原目录已不存在，无法原地恢复: {cwd}\n"
                          f"transcript: {record['path']}\n")
@@ -458,19 +537,21 @@ def run_picker(records, now, query=""):
         sys.stderr.write("没有找到任何 session\n")
         return 0
     by_id = {r["session_id"]: r for r in records}
+    live = live_sessions()
+    live_ids = set(live)
     preview_dir = tempfile.mkdtemp(prefix="recall-preview-")
     try:
         for r in records:
             with open(os.path.join(preview_dir, r["session_id"]), "w", encoding="utf-8") as f:
-                f.write(preview_text(r, now))
+                f.write(preview_text(r, now, live.get(r["session_id"])))
         with open(os.path.join(preview_dir, EXIT_ID), "w", encoding="utf-8") as f:
             f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
-        lines = "\n".join([_exit_line()] + [fzf_line(r, now) for r in records])
+        lines = "\n".join([_exit_line()] + [fzf_line(r, now, live_ids) for r in records])
         cmd = [
             "fzf", "--exact", "--delimiter=\t", "--with-nth=1,2",
             "--preview", f"cat {preview_dir}/{{3}}",
             "--preview-window=right,55%,wrap",
-            "--header", "Enter 恢复 · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
+            "--header", "Enter 恢复/跳转(●=运行中) · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
             "--prompt=recall> ", "--query", query,
         ]
         proc = subprocess.run(cmd, input=lines, text=True, stdout=subprocess.PIPE)
@@ -479,7 +560,7 @@ def run_picker(records, now, query=""):
         # remove here so it's gone even when resume() replaces the process via execvp
         shutil.rmtree(preview_dir, ignore_errors=True)
     if sid and sid != EXIT_ID and sid in by_id:
-        return resume(by_id[sid])
+        return resume(by_id[sid], live=live)
     return 0
 
 
