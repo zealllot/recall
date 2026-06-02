@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """recall — find and resume lost Claude Code sessions across all projects."""
 
+import datetime
 import glob
 import json
 import os
@@ -15,10 +16,50 @@ PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 CACHE_PATH = os.path.expanduser("~/.claude/.recall-cache.json")
 # Bump whenever extract()'s output shape or logic changes, so stale records
 # (cached under an unchanged file mtime) are invalidated and re-extracted.
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 _ACK = {"ok", "y", "yes", "好", "嗯"}
 _FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def _dur(seconds):
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h"
+    return f"{s // 86400}d"
+
+
+def _branch_durations(seq):
+    """seq: [(ts_or_None, branch)] in file order. Return per-branch
+    {name, seconds, count} in first-seen order; each interval's time is
+    credited to the branch active when it started."""
+    secs, cnt, order = {}, {}, []
+    for _, b in seq:
+        if b not in secs:
+            secs[b], cnt[b] = 0.0, 0
+            order.append(b)
+        cnt[b] += 1
+    prev = None
+    for ts, b in seq:
+        if prev and prev[0] is not None and ts is not None:
+            delta = ts - prev[0]
+            if delta > 0:
+                secs[prev[1]] += delta
+        prev = (ts, b)
+    return [{"name": n, "seconds": secs[n], "count": cnt[n]} for n in order]
+
+
+def _parse_ts(s):
+    if not isinstance(s, str):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _snippet(text, limit=200):
@@ -87,8 +128,17 @@ def preview_text(record, now):
     out = [f"{project_short(record['cwd'])}  ·  "
            f"{relative_time(int(record['mtime']), now)}  ·  "
            f"{record['msg_count']} 条消息"]
-    if record.get("branch"):
-        out.append(f"分支(末次·可能已被部署切走): {record['branch']}")
+    branches = record.get("branches")
+    if not branches and record.get("branch"):
+        branches = [{"name": record["branch"], "seconds": 0, "count": 0}]
+    if branches and len(branches) == 1:
+        out.append(f"分支: {branches[0]['name']}")
+    elif branches:
+        ranked = sorted(branches, key=lambda b: b["seconds"], reverse=True)
+        top = ranked[0]["name"]
+        segs = [f"{'★ ' if b['name'] == top else ''}{b['name']} ({_dur(b['seconds'])})"
+                for b in ranked]
+        out.append("分支 (★=停留最久): " + " · ".join(segs))
     if record.get("ai_title"):
         out.append(f"标题: {record['ai_title']}")
     out += ["", "── Prompt 轨迹 (最近在最下) ──"]
@@ -202,6 +252,7 @@ def extract(path):
     """Parse a session JSONL file into one record dict, or None if it's empty."""
     cwd = branch = ai_title = last_assistant = None
     prompts, files, seen = [], [], set()
+    branch_seq = []  # (timestamp, branch) in file order
     msg_count = 0
     try:
         f = open(path, encoding="utf-8")
@@ -233,6 +284,7 @@ def extract(path):
                 cwd = d["cwd"]
             if d.get("gitBranch"):
                 branch = d["gitBranch"]
+                branch_seq.append((_parse_ts(d.get("timestamp")), branch))
             if t in ("user", "assistant"):
                 msg_count += 1
             if t == "assistant":
@@ -266,6 +318,7 @@ def extract(path):
         "path": os.path.abspath(path),
         "cwd": cwd,
         "branch": branch,
+        "branches": _branch_durations(branch_seq),
         "ai_title": ai_title,
         "prompts": prompts,
         "files_changed": files[:20],
