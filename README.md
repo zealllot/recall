@@ -10,13 +10,26 @@ prompt trail** you typed, lets you fuzzy-search it, shows a computed
 
 ## Install
 
+`recall` is a **single self-contained `python3` script** — no pip, no
+dependencies, no build step. Pick either:
+
 ```sh
-make install          # copies recall.py -> ~/bin/recall
+# A) one command, no clone needed
+curl -fsSL https://raw.githubusercontent.com/zealllot/recall/main/install.sh | bash
+
+# B) from a clone
+git clone https://github.com/zealllot/recall && cd recall && make install
 ```
+
+Both copy the script to `~/bin/recall` and, if `~/bin` isn't on your `PATH`,
+print the exact `export` line to add. **Requirements:** macOS, `python3`, and
+Claude Code (a `~/.claude` directory).
 
 The interactive picker needs `fzf`. On first run without it, `recall` offers to
 `brew install fzf` for you (you confirm; declining is remembered). Without fzf it
-just falls back to the `--list` table.
+falls back to the `--list` table.
+
+> Installing via an AI agent? Just give it this repo URL — see [AGENTS.md](AGENTS.md).
 
 ## Usage
 
