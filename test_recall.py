@@ -119,7 +119,41 @@ class ProjectTreeTest(unittest.TestCase):
         self.assertEqual(out[0]["branches"], [])
 
 
+class ConfigTest(unittest.TestCase):
+    def test_missing_config_is_empty(self):
+        self.assertEqual(recall.load_config("/no/such/config.json"), {})
+
+    def test_round_trip(self):
+        p = os.path.join(tempfile.mkdtemp(), "c.json")
+        recall.save_config(p, {"lang": "en"})
+        self.assertEqual(recall.load_config(p), {"lang": "en"})
+
+
+class I18nTest(unittest.TestCase):
+    def tearDown(self):
+        recall.set_lang("zh")  # restore default for other tests
+
+    def test_t_switches_language(self):
+        recall.set_lang("zh")
+        self.assertEqual(recall.t("none_found"), "没有找到任何 session")
+        recall.set_lang("en")
+        self.assertEqual(recall.t("none_found"), "No sessions found")
+
+    def test_unknown_lang_falls_back_to_zh(self):
+        recall.set_lang("fr")
+        self.assertEqual(recall.t("none_found"), "没有找到任何 session")
+
+    def test_relative_time_is_localized(self):
+        recall.set_lang("en")
+        self.assertEqual(recall.relative_time(0, 5 * 60), "5m ago")
+        self.assertEqual(recall.relative_time(0, 5), "just now")
+
+
 class RelativeTimeTest(unittest.TestCase):
+    def setUp(self):
+        recall.set_lang("zh")
+
+
     NOW = 1_000_000  # fixed reference "now" in epoch seconds
 
     def rel(self, seconds_ago):
@@ -312,6 +346,9 @@ class PadTest(unittest.TestCase):
 
 class RenderTest(unittest.TestCase):
     NOW = 1_000_000
+
+    def setUp(self):
+        recall.set_lang("zh")  # render tests assert the Chinese labels
 
     def test_project_short_is_cwd_basename(self):
         self.assertEqual(recall.project_short("/a/b/webapp"), "webapp")

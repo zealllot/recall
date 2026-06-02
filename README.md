@@ -22,8 +22,13 @@ recall            # all projects, fuzzy picker
 recall 时区       # preseed the search query
 recall .          # only sessions from the current git repo / dir  (or --here)
 recall --list     # plain ranked table (also the no-fzf fallback); accepts a query
+recall --lang     # re-run the language chooser (中文 / English)
 recall --help     # usage
 ```
+
+On first use `recall` asks for a UI language (中文 / English) and remembers it in
+`~/.claude/.recall-config.json`. Prompt content is never translated — only the
+chrome (labels, headers, relative times).
 
 In the picker: type to search across the whole prompt trail, the right pane
 previews the trail + last assistant reply + files changed, `Enter` does

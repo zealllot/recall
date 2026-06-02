@@ -15,6 +15,78 @@ import unicodedata
 PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 CACHE_PATH = os.path.expanduser("~/.claude/.recall-cache.json")
 SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")  # live-process registry
+CONFIG_PATH = os.path.expanduser("~/.claude/.recall-config.json")
+
+# --- i18n -------------------------------------------------------------------
+# All user-facing strings live here, keyed by language. Use t(key, *args).
+_MSG = {
+    "zh": {
+        "just_now": "刚刚", "minutes": "{}分钟前", "hours": "{}小时前",
+        "yesterday": "昨天", "days": "{}天前",
+        "msgs": "{} 条消息", "no_prompt": "(无 prompt)",
+        "live": "● 运行中 (pid {}) — Enter 跳到该窗口",
+        "branch_one": "分支:", "branch_hdr": "分支 (★=对话最多):",
+        "projbranch_hdr": "项目/分支 (★=对话最多):",
+        "title": "标题:", "trail_hdr": "── Prompt 轨迹 (最近在最下) ──",
+        "more_earlier": "  … +{} 更早",
+        "whereto_hdr": "── 上次干到哪 (现算·不调模型) ──",
+        "last_reply": "Claude 末回复:", "files": "改过的文件 ({}):",
+        "exit_label": "退出 (exit / quit) — 不恢复任何 session",
+        "exit_preview": "按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)",
+        "header_hint": "Enter 恢复/跳转(●=运行中) · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
+        "none_found": "没有找到任何 session",
+        "cwd_gone": "原目录已不存在，无法原地恢复: {}\ntranscript: {}",
+        "jumped": "已跳到正在运行的窗口 (pid {})",
+        "fzf_missing": "fzf 未安装，降级为列表。安装: brew install fzf",
+    },
+    "en": {
+        "just_now": "just now", "minutes": "{}m ago", "hours": "{}h ago",
+        "yesterday": "yesterday", "days": "{}d ago",
+        "msgs": "{} msgs", "no_prompt": "(no prompt)",
+        "live": "● running (pid {}) — Enter jumps to its window",
+        "branch_one": "Branch:", "branch_hdr": "Branches (★=most active):",
+        "projbranch_hdr": "Projects / branches (★=most active):",
+        "title": "Title:", "trail_hdr": "── Prompt trail (latest at bottom) ──",
+        "more_earlier": "  … +{} earlier",
+        "whereto_hdr": "── Where you left off (computed, no model) ──",
+        "last_reply": "Claude's last reply:", "files": "Files changed ({}):",
+        "exit_label": "exit / quit — resume nothing",
+        "exit_preview": "Press Enter to quit recall without resuming.\n(or just press Esc / Ctrl-C)",
+        "header_hint": "Enter resume/jump (●=running) · Esc/Ctrl-C quit · type exit to quit",
+        "none_found": "No sessions found",
+        "cwd_gone": "Original directory is gone; can't resume in place: {}\ntranscript: {}",
+        "jumped": "Jumped to the running window (pid {})",
+        "fzf_missing": "fzf not installed; falling back to list. Install: brew install fzf",
+    },
+}
+_LANG = "zh"
+
+
+def set_lang(lang):
+    global _LANG
+    _LANG = lang if lang in _MSG else "zh"
+
+
+def t(key, *args):
+    msg = _MSG.get(_LANG, _MSG["zh"]).get(key) or _MSG["zh"][key]
+    return msg.format(*args) if args else msg
+
+
+def load_config(path=CONFIG_PATH):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(path, cfg):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False)
+    except OSError:
+        pass
 # Bump whenever extract()'s output shape or logic changes, so stale records
 # (cached under an unchanged file mtime) are invalidated and re-extracted.
 CACHE_VERSION = 4
@@ -132,7 +204,7 @@ def project_short(cwd):
 def last_prompt_display(record):
     if record["prompts"]:
         return record["prompts"][-1]
-    return record.get("ai_title") or "(无 prompt)"
+    return record.get("ai_title") or t("no_prompt")
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -188,12 +260,12 @@ def _branch_section(projects, color=False):
         if not branches:
             return []
         if len(branches) == 1:
-            return [_c("分支:", "36", color) + f" {branches[0]['name']}"]
-        out = [_c("分支 (★=对话最多):", "36", color)]
+            return [_c(t("branch_one"), "36", color) + f" {branches[0]['name']}"]
+        out = [_c(t("branch_hdr"), "36", color)]
         out += [line("  ", j == 0, b["name"], b["count"])
                 for j, b in enumerate(branches)]
         return out
-    out = [_c("项目/分支 (★=对话最多):", "36", color)]
+    out = [_c(t("projbranch_hdr"), "36", color)]
     for i, p in enumerate(projects):
         out.append(line("", i == 0, _c(p["name"], "1", color), p["count"]))
         out += [line("    ", j == 0, b["name"], b["count"])
@@ -205,17 +277,17 @@ def preview_text(record, now, live_pid=None, color=False):
     c = lambda s, code: _c(s, code, color)
     out = [c(project_short(record["cwd"]), "1;36") + "  ·  "
            + c(relative_time(int(record["mtime"]), now), "2") + "  ·  "
-           + c(f"{record['msg_count']} 条消息", "2")]
+           + c(t("msgs", record["msg_count"]), "2")]
     if live_pid:
-        out.append(c(f"● 运行中 (pid {live_pid}) — Enter 跳到该窗口", "32"))
+        out.append(c(t("live", live_pid), "32"))
     out += _branch_section(record.get("projects") or [], color)
     if record.get("ai_title"):
-        out.append(c("标题:", "2") + f" {record['ai_title']}")
-    out += ["", c("── Prompt 轨迹 (最近在最下) ──", "36")]
+        out.append(c(t("title"), "2") + f" {record['ai_title']}")
+    out += ["", c(t("trail_hdr"), "36")]
     prompts = record["prompts"]
     overflow = len(prompts) - _TRAIL_CAP
     if overflow > 0:
-        out.append(c(f"  … +{overflow} 更早", "2"))
+        out.append(c(t("more_earlier", overflow), "2"))
     shown = prompts[-_TRAIL_CAP:]
     for i, p in enumerate(shown):
         text = _truncate_cols(p, _TRAIL_COLS)
@@ -223,9 +295,9 @@ def preview_text(record, now, live_pid=None, color=False):
             out.append(c(f"▶ {text}", "1;32"))  # most recent: bold green
         else:
             out.append(f"· {text}")
-    out += ["", c("── 上次干到哪 (现算·不调模型) ──", "36")]
+    out += ["", c(t("whereto_hdr"), "36")]
     if record.get("last_assistant"):
-        out.append(c("Claude 末回复:", "2")
+        out.append(c(t("last_reply"), "2")
                    + f" {_truncate_cols(record['last_assistant'], _ASSIST_COLS)}")
     if record.get("files_changed"):
         seen, names = set(), []
@@ -234,7 +306,7 @@ def preview_text(record, now, live_pid=None, color=False):
             if b not in seen:
                 seen.add(b)
                 names.append(b)
-        out.append(c(f"改过的文件 ({len(names)}):", "36"))
+        out.append(c(t("files", len(names)), "36"))
         out += [f"  · {n}" for n in names[:_FILES_CAP]]
         if len(names) > _FILES_CAP:
             out.append(c(f"  … +{len(names) - _FILES_CAP}", "2"))
@@ -286,7 +358,7 @@ EXIT_ID = "__recall_exit__"
 
 def _exit_line():
     """A sentinel picker row: choosing it quits without resuming anything."""
-    visible = f"{_pad('', _TIME_COL)}  {_pad('✕', _PROJ_COL)}  退出 (exit / quit) — 不恢复任何 session"
+    visible = f"  {_pad('', _TIME_COL)}  {_pad('✕', _PROJ_COL)}  {t('exit_label')}"
     return "\t".join([visible, "exit quit 退出 q", EXIT_ID, ""])
 
 
@@ -300,7 +372,7 @@ def parse_selection(line):
 
 def run_list(records, now, out):
     if not records:
-        out.write("没有找到任何 session\n")
+        out.write(t("none_found") + "\n")
         return
     for r in records:
         out.write(f"cd {r['cwd']} && claude -r {r['session_id']}"
@@ -415,15 +487,15 @@ def relative_time(ts, now):
     """Human relative time in Chinese; older than a week falls back to MM-DD."""
     delta = now - ts
     if delta < 60:
-        return "刚刚"
+        return t("just_now")
     if delta < 3600:
-        return f"{delta // 60}分钟前"
+        return t("minutes", delta // 60)
     if delta < 86400:
-        return f"{delta // 3600}小时前"
+        return t("hours", delta // 3600)
     if delta < 172800:
-        return "昨天"
+        return t("yesterday")
     if delta < 604800:
-        return f"{delta // 86400}天前"
+        return t("days", delta // 86400)
     return time.strftime("%m-%d", time.localtime(ts))
 
 
@@ -536,12 +608,11 @@ def resume(record, live=None, jump_fn=jump_to_session):
     if live is None:
         live = live_sessions()
     if sid in live and jump_fn(live[sid]):
-        sys.stderr.write(f"已跳到正在运行的窗口 (pid {live[sid]})\n")
+        sys.stderr.write(t("jumped", live[sid]) + "\n")
         return 0
     cwd = record["cwd"]
     if not os.path.isdir(cwd):
-        sys.stderr.write(f"原目录已不存在，无法原地恢复: {cwd}\n"
-                         f"transcript: {record['path']}\n")
+        sys.stderr.write(t("cwd_gone", cwd, record["path"]) + "\n")
         return 1
     os.chdir(cwd)
     os.execvp("claude", ["claude", "-r", sid])
@@ -549,7 +620,7 @@ def resume(record, live=None, jump_fn=jump_to_session):
 
 def run_picker(records, now, query=""):
     if not records:
-        sys.stderr.write("没有找到任何 session\n")
+        sys.stderr.write(t("none_found") + "\n")
         return 0
     by_id = {r["session_id"]: r for r in records}
     live = live_sessions()
@@ -560,13 +631,13 @@ def run_picker(records, now, query=""):
             with open(os.path.join(preview_dir, r["session_id"]), "w", encoding="utf-8") as f:
                 f.write(preview_text(r, now, live.get(r["session_id"]), color=True))
         with open(os.path.join(preview_dir, EXIT_ID), "w", encoding="utf-8") as f:
-            f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
+            f.write(t("exit_preview"))
         lines = "\n".join([_exit_line()] + [fzf_line(r, now, live_ids) for r in records])
         cmd = [
             "fzf", "--exact", "--delimiter=\t", "--with-nth=1,2",
             "--preview", f"cat {preview_dir}/{{3}}",
             "--preview-window=right,55%,wrap",
-            "--header", "Enter 恢复/跳转(●=运行中) · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
+            "--header", t("header_hint"),
             "--prompt=recall> ", "--query", query,
         ]
         proc = subprocess.run(cmd, input=lines, text=True, stdout=subprocess.PIPE)
@@ -586,11 +657,30 @@ recall — find and resume lost Claude Code sessions across all projects.
   recall <query>      open the picker with the search box pre-filled
   recall . | --here   only sessions from the current git repo / dir
   recall --list       plain ranked table (also the no-fzf fallback); accepts a query
+  recall --lang       re-run the language chooser (中文 / English)
   recall --help       show this help
+
+Language is asked once on first use and saved to ~/.claude/.recall-config.json.
 
 In the picker: type to search (prompts, branches, project, title); Enter resumes
 (cd + claude -r); Esc/Ctrl-C or the ✕ row quits.
 """
+
+
+def resolve_lang(config_path=CONFIG_PATH):
+    """Use the saved language; on first use ask once (TTY only) and remember it."""
+    cfg = load_config(config_path)
+    if cfg.get("lang") in _MSG:
+        return cfg["lang"]
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return "zh"
+    sys.stdout.write("选择语言 / Choose language:\n  1) 中文\n  2) English\n> ")
+    sys.stdout.flush()
+    choice = sys.stdin.readline().strip()
+    lang = "en" if choice == "2" else "zh"
+    cfg["lang"] = lang
+    save_config(config_path, cfg)
+    return lang
 
 
 def main(argv=None):
@@ -598,9 +688,16 @@ def main(argv=None):
     if "--help" in argv or "-h" in argv:
         sys.stdout.write(_USAGE)
         return 0
+    if "--lang" in argv:  # `recall --lang` re-runs the language chooser
+        try:
+            os.remove(CONFIG_PATH)
+        except OSError:
+            pass
+    set_lang(resolve_lang())
     here = "--here" in argv or "." in argv
     list_mode = "--list" in argv
-    query = " ".join(a for a in argv if not a.startswith("-") and a != ".")
+    query = " ".join(a for a in argv
+                     if not a.startswith("-") and a != ".")
     now = int(time.time())
 
     records = index()
@@ -609,7 +706,7 @@ def main(argv=None):
 
     if list_mode or not shutil.which("fzf"):
         if not list_mode:
-            sys.stderr.write("fzf 未安装，降级为列表。安装: brew install fzf\n")
+            sys.stderr.write(t("fzf_missing") + "\n")
         run_list(filter_query(records, now, query), now, sys.stdout)
         return 0
     return run_picker(records, now, query)
