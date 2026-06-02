@@ -317,12 +317,12 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(sid, SID)
         self.assertEqual(cwd, "/Users/me/go/src/github.com/theplant/mcd-website")
 
-    def test_fzf_line_hides_blob_id_cwd_with_ansi_conceal(self):
-        line = recall.fzf_line(sample_record(), self.NOW)
-        # visible prefix (time/proj/last) carries no conceal code; the rest does
-        self.assertIn("\x1b[8m", line)
-        self.assertTrue(line.endswith("\x1b[0m"))
-        self.assertNotIn("\x1b", line.split("\t")[0])  # reltime stays clean
+    def test_fzf_line_keeps_id_and_cwd_in_unsearched_tail_fields(self):
+        # fields 5,6 carry id/cwd; --with-nth=1,2,3,4 keeps them off display/search
+        fields = recall.fzf_line(sample_record(), self.NOW).split("\t")
+        self.assertEqual(len(fields), 6)
+        self.assertEqual(fields[4], SID)
+        self.assertEqual(fields[5], "/Users/me/go/src/github.com/theplant/mcd-website")
 
     def test_fzf_line_search_field_contains_whole_trail(self):
         line = recall.fzf_line(sample_record(), self.NOW)

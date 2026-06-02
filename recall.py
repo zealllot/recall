@@ -127,11 +127,6 @@ def last_prompt_display(record):
     return record.get("ai_title") or "(无 prompt)"
 
 
-# fzf with --with-nth would restrict *search* to the shown fields, so a hidden
-# field can't be searched that way. Instead show 3 clean columns and append the
-# search blob + id + cwd wrapped in the ANSI "conceal" code: --ansi strips codes
-# for matching (so the blob stays searchable) and the terminal renders it hidden.
-_CONCEAL, _RESET = "\x1b[8m", "\x1b[0m"
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -140,19 +135,24 @@ def _strip_ansi(s):
 
 
 def fzf_line(record, now):
-    """3 visible cells (time/proj/last) + a concealed tail carrying the search
-    blob, session id and cwd. The blob holds the whole prompt trail plus branch
-    /project names and the ai-title, so a query matches by topic/branch too."""
+    """Six tab fields. fzf shows+searches 1..4 (time, proj, last prompt, a
+    keyword column) via --with-nth; 5 (id) and 6 (cwd) are carried for the
+    action but not shown/searched. fzf can't search a field it doesn't show
+    (and would reveal matches inside a hidden one anyway), so the searchable
+    keywords — branch/project names, ai-title, the prompt trail — live in the
+    visible 4th column rather than a hidden blob."""
     reltime = relative_time(int(record["mtime"]), now)
     proj = project_short(record["cwd"])
     last = _clean(last_prompt_display(record))
-    extra = [record.get("ai_title") or ""]
+    kw = []
     for p in record.get("projects") or []:
-        extra.append(p["name"])
-        extra.extend(b["name"] for b in p["branches"])
-    blob = _clean(" / ".join(record["prompts"]) + " " + " ".join(extra))
-    tail = "\t".join([blob, record["session_id"], record["cwd"]])
-    return f"{reltime}\t{proj}\t{last}\t{_CONCEAL}{tail}{_RESET}"
+        kw.append(p["name"])
+        kw.extend(b["name"] for b in p["branches"])
+    if record.get("ai_title"):
+        kw.append(record["ai_title"])
+    keywords = _clean(" ".join(kw) + " / " + " / ".join(record["prompts"]))
+    return "\t".join([reltime, proj, last, keywords,
+                      record["session_id"], record["cwd"]])
 
 
 def _branch_section(projects):
@@ -244,9 +244,8 @@ EXIT_ID = "__recall_exit__"
 
 def _exit_line():
     """A sentinel picker row: choosing it quits without resuming anything."""
-    visible = "\t".join(["", "✕", "退出 (exit / quit) — 不恢复任何 session"])
-    tail = "\t".join(["exit quit 退出 q", EXIT_ID, ""])
-    return f"{visible}\t{_CONCEAL}{tail}{_RESET}"
+    return "\t".join(["", "✕", "退出 (exit / quit) — 不恢复任何 session",
+                      "exit quit 退出 q", EXIT_ID, ""])
 
 
 def parse_selection(line):
@@ -445,7 +444,7 @@ def run_picker(records, now, query=""):
         f.write("按 Enter 退出 recall，不恢复任何 session。\n(也可以直接按 Esc / Ctrl-C)")
     lines = "\n".join([_exit_line()] + [fzf_line(r, now) for r in records])
     cmd = [
-        "fzf", "--ansi", "--exact", "--delimiter=\t",
+        "fzf", "--exact", "--delimiter=\t", "--with-nth=1,2,3,4",
         "--preview", f"cat {preview_dir}/{{5}}",
         "--preview-window=right,55%,wrap",
         "--header", "Enter 恢复 · Esc/Ctrl-C 退出 · 输入 exit 选「退出」",
