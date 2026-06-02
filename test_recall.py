@@ -69,34 +69,14 @@ class IsJunkTest(unittest.TestCase):
         self.assertFalse(recall.is_junk("filled JST but page shows UTC"))
 
 
-class DurTest(unittest.TestCase):
-    def test_formats(self):
-        self.assertEqual(recall._dur(45), "45s")
-        self.assertEqual(recall._dur(120), "2m")
-        self.assertEqual(recall._dur(7200), "2h")
-        self.assertEqual(recall._dur(180000), "2d")
-
-
-class BranchDurationsTest(unittest.TestCase):
-    def test_sums_interval_to_the_branch_active_during_it(self):
-        # (timestamp, branch) in file order; delta goes to the earlier branch
-        seq = [(0, "master"), (10, "master"), (20, "feature"), (3620, "feature")]
-        out = recall._branch_durations(seq)
-        by = {b["name"]: b for b in out}
-        self.assertEqual(set(by), {"master", "feature"})
-        self.assertEqual(by["master"]["seconds"], 20)    # 0->10 and 10->20
-        self.assertEqual(by["feature"]["seconds"], 3600)  # 20->3620
-        self.assertEqual(by["feature"]["count"], 2)
-
-    def test_preserves_first_seen_order(self):
-        seq = [(0, "a"), (1, "b"), (2, "a")]
-        self.assertEqual([b["name"] for b in recall._branch_durations(seq)], ["a", "b"])
-
-    def test_tolerates_missing_timestamps(self):
-        seq = [(None, "a"), (None, "b")]
-        out = recall._branch_durations(seq)
-        self.assertEqual({b["name"] for b in out}, {"a", "b"})
-        self.assertEqual(out[0]["seconds"], 0)
+class BranchStatsTest(unittest.TestCase):
+    def test_counts_messages_per_branch_in_first_seen_order(self):
+        names = ["master", "master", "feature", "master"]
+        out = recall._branch_stats(names)
+        self.assertEqual([b["name"] for b in out], ["master", "feature"])
+        by = {b["name"]: b["count"] for b in out}
+        self.assertEqual(by["master"], 3)
+        self.assertEqual(by["feature"], 1)
 
 
 class RelativeTimeTest(unittest.TestCase):
@@ -337,23 +317,26 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(len(trail), 1)
         self.assertTrue(trail[0].endswith("…"))
 
-    def test_preview_lists_all_branches_starring_longest(self):
+    def test_preview_lists_branches_vertically_starring_most_active(self):
         rec = sample_record(branches=[
-            {"name": "master", "seconds": 60, "count": 3},
-            {"name": "ci/x", "seconds": 3600, "count": 5},
+            {"name": "master", "count": 3},
+            {"name": "ci/x", "count": 30},
         ])
         out = recall.preview_text(rec, self.NOW)
-        bl = next(l for l in out.splitlines() if l.startswith("分支"))
-        self.assertIn("master", bl)
-        self.assertIn("★ ci/x", bl)       # longest gets the star
-        self.assertNotIn("★ master", bl)
+        branch_lines = [l for l in out.splitlines()
+                        if l.lstrip().startswith(("★", "·")) and
+                        ("master" in l or "ci/x" in l)]
+        self.assertEqual(len(branch_lines), 2)          # one per line (vertical)
+        star_line = next(l for l in out.splitlines() if l.lstrip().startswith("★"))
+        self.assertIn("ci/x", star_line)                # most messages -> starred
+        self.assertNotIn("master", star_line)
+        self.assertIn("30", star_line)                  # count shown
 
     def test_preview_single_branch_no_star(self):
-        rec = sample_record(branches=[{"name": "main", "seconds": 100, "count": 9}])
+        rec = sample_record(branches=[{"name": "main", "count": 9}])
         out = recall.preview_text(rec, self.NOW)
-        bl = next(l for l in out.splitlines() if l.startswith("分支"))
-        self.assertIn("main", bl)
-        self.assertNotIn("★", bl)
+        self.assertIn("main", out)
+        self.assertNotIn("★", out)
 
     def test_preview_caps_long_trail(self):
         rec = sample_record(prompts=[f"p{i}" for i in range(20)])
