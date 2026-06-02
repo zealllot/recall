@@ -12,6 +12,9 @@ import time
 
 PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 CACHE_PATH = os.path.expanduser("~/.claude/.recall-cache.json")
+# Bump whenever extract()'s output shape or logic changes, so stale records
+# (cached under an unchanged file mtime) are invalidated and re-extracted.
+CACHE_VERSION = 1
 
 _ACK = {"ok", "y", "yes", "好", "嗯"}
 _FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -92,15 +95,19 @@ def cache_load(path):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+    if not isinstance(data, dict) or data.get("version") != CACHE_VERSION:
+        return {}  # missing/legacy/older schema -> force re-extract
+    entries = data.get("entries")
+    return entries if isinstance(entries, dict) else {}
 
 
 def cache_save(path, cache):
     try:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False)
+            json.dump({"version": CACHE_VERSION, "entries": cache}, f,
+                      ensure_ascii=False)
     except OSError:
         pass
 

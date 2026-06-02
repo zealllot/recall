@@ -300,6 +300,19 @@ class CacheIOTest(unittest.TestCase):
         recall.cache_save(p, cache)
         self.assertEqual(recall.cache_load(p), cache)
 
+    def test_load_ignores_mismatched_or_missing_version(self):
+        tmp = tempfile.mkdtemp()
+        # legacy flat format (no version) -> invalidated
+        legacy = os.path.join(tmp, "legacy.json")
+        with open(legacy, "w") as f:
+            json.dump({"/a.jsonl": {"mtime": 1.0, "record": {}}}, f)
+        self.assertEqual(recall.cache_load(legacy), {})
+        # explicit older version -> invalidated
+        old = os.path.join(tmp, "old.json")
+        with open(old, "w") as f:
+            json.dump({"version": recall.CACHE_VERSION - 1, "entries": {"/a": {}}}, f)
+        self.assertEqual(recall.cache_load(old), {})
+
 
 class FilterHereTest(unittest.TestCase):
     def test_keeps_only_sessions_under_cwd(self):
