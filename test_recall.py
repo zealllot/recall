@@ -11,20 +11,20 @@ SID = "5d6f2387-cc69-493a-b622-9bf218ec6a96"
 
 FIXTURE_LINES = [
     {"type": "attachment", "cwd": "/repo/path", "gitBranch": "master"},
-    {"type": "user", "gitBranch": "master",
+    {"type": "user", "cwd": "/repo/path", "gitBranch": "master",
      "message": {"role": "user", "content": "看下这个需求 你规划一下"}},
     {"type": "last-prompt", "lastPrompt": "看下这个需求 你规划一下"},
     {"type": "ai-title", "aiTitle": "Review requirement"},
-    {"type": "assistant", "gitBranch": "master",
+    {"type": "assistant", "cwd": "/repo/path", "gitBranch": "master",
      "message": {"role": "assistant",
                  "content": [{"type": "text", "text": "好的，我先看一下"}]}},
     {"type": "last-prompt", "lastPrompt": "ok"},
-    {"type": "user", "gitBranch": "master",
+    {"type": "user", "cwd": "/repo/path", "gitBranch": "master",
      "message": {"role": "user", "content": "ok"}},
     {"type": "last-prompt", "lastPrompt": "帮我部署 prod"},
-    {"type": "user", "gitBranch": "release-test",
+    {"type": "user", "cwd": "/repo/path", "gitBranch": "release-test",
      "message": {"role": "user", "content": "帮我部署 prod"}},
-    {"type": "assistant", "gitBranch": "release-test",
+    {"type": "assistant", "cwd": "/repo/path", "gitBranch": "release-test",
      "message": {"role": "assistant", "content": [
          {"type": "tool_use", "name": "Edit",
           "input": {"file_path": "/repo/path/scheduler.go",
@@ -69,14 +69,54 @@ class IsJunkTest(unittest.TestCase):
         self.assertFalse(recall.is_junk("filled JST but page shows UTC"))
 
 
-class BranchStatsTest(unittest.TestCase):
-    def test_counts_messages_per_branch_in_first_seen_order(self):
-        names = ["master", "master", "feature", "master"]
-        out = recall._branch_stats(names)
-        self.assertEqual([b["name"] for b in out], ["master", "feature"])
-        by = {b["name"]: b["count"] for b in out}
-        self.assertEqual(by["master"], 3)
-        self.assertEqual(by["feature"], 1)
+class RepoRootTest(unittest.TestCase):
+    def test_walks_up_to_dir_containing_dotgit(self):
+        tmp = tempfile.mkdtemp()
+        repo = os.path.join(tmp, "repo")
+        os.makedirs(os.path.join(repo, ".git"))
+        sub = os.path.join(repo, "a", "b")
+        os.makedirs(sub)
+        self.assertEqual(recall._repo_root(sub), repo)
+        self.assertEqual(recall._repo_root(repo), repo)
+
+    def test_standalone_worktree_dotgit_file_returns_itself(self):
+        tmp = tempfile.mkdtemp()
+        wt = os.path.join(tmp, "wt")
+        os.makedirs(wt)
+        open(os.path.join(wt, ".git"), "w").close()  # worktree marker is a file
+        self.assertEqual(recall._repo_root(wt), wt)
+
+    def test_worktree_under_repo_collapses_to_main_repo(self):
+        tmp = tempfile.mkdtemp()
+        repo = os.path.join(tmp, "repo")
+        os.makedirs(os.path.join(repo, ".git"))               # main repo: .git is a dir
+        wt = os.path.join(repo, ".claude", "worktrees", "x")
+        os.makedirs(wt)
+        open(os.path.join(wt, ".git"), "w").close()           # worktree: .git is a file
+        self.assertEqual(recall._repo_root(wt), repo)
+
+    def test_no_repo_returns_input(self):
+        self.assertIsInstance(recall._repo_root(tempfile.mkdtemp()), str)
+
+
+class ProjectTreeTest(unittest.TestCase):
+    def root(self, cwd):  # fake resolver: repo root = first 2 path segments
+        return "/".join(cwd.split("/")[:3])
+
+    def test_groups_by_project_sorted_by_count_desc(self):
+        pairs = [("/w/a/x", "m"), ("/w/a/y", "m"), ("/w/a", "f"), ("/w/b", "main")]
+        out = recall._project_tree(pairs, self.root)
+        self.assertEqual([p["name"] for p in out], ["a", "b"])  # a has 3, b has 1
+        a = out[0]
+        self.assertEqual(a["count"], 3)
+        self.assertEqual([b["name"] for b in a["branches"]], ["m", "f"])  # m=2, f=1
+        self.assertEqual(a["branches"][0]["count"], 2)
+
+    def test_skips_none_cwd_and_handles_branchless(self):
+        out = recall._project_tree([(None, "x"), ("/w/a/z", None)], self.root)
+        self.assertEqual([p["name"] for p in out], ["a"])
+        self.assertEqual(out[0]["count"], 1)
+        self.assertEqual(out[0]["branches"], [])
 
 
 class RelativeTimeTest(unittest.TestCase):
@@ -119,9 +159,6 @@ class ExtractTest(unittest.TestCase):
     def test_cwd(self):
         self.assertEqual(self.rec["cwd"], "/repo/path")
 
-    def test_last_branch_wins(self):
-        self.assertEqual(self.rec["branch"], "release-test")
-
     def test_ai_title(self):
         self.assertEqual(self.rec["ai_title"], "Review requirement")
 
@@ -142,9 +179,14 @@ class ExtractTest(unittest.TestCase):
     def test_has_mtime(self):
         self.assertGreater(self.rec["mtime"], 0)
 
-    def test_branches_lists_all_seen_in_order(self):
-        self.assertEqual([b["name"] for b in self.rec["branches"]],
-                         ["master", "release-test"])
+    def test_projects_single_repo_with_branch_breakdown(self):
+        projs = self.rec["projects"]
+        self.assertEqual(len(projs), 1)
+        self.assertEqual(projs[0]["name"], "path")  # _repo_root('/repo/path')
+        names = {b["name"] for b in projs[0]["branches"]}
+        self.assertEqual(names, {"master", "release-test"})
+        # master has more messages -> sorted first
+        self.assertEqual(projs[0]["branches"][0]["name"], "master")
 
 
 class ExtractDedupTest(unittest.TestCase):
@@ -226,7 +268,8 @@ def sample_record(**over):
         "session_id": SID,
         "path": "/x/" + SID + ".jsonl",
         "cwd": "/Users/me/go/src/github.com/theplant/mcd-website",
-        "branch": "release-test",
+        "projects": [{"name": "mcd-website", "path": "/p", "count": 64,
+                      "branches": [{"name": "release-test", "count": 64}]}],
         "ai_title": "Review requirement",
         "prompts": ["看下这个需求", "填了日本时间显示0时区", "帮我部署 prod"],
         "files_changed": ["/repo/scheduler.go", "/repo/sub/schedule_test.go"],
@@ -317,11 +360,10 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(len(trail), 1)
         self.assertTrue(trail[0].endswith("…"))
 
-    def test_preview_lists_branches_vertically_starring_most_active(self):
-        rec = sample_record(branches=[
-            {"name": "master", "count": 3},
-            {"name": "ci/x", "count": 30},
-        ])
+    def test_preview_single_project_lists_branches_vertically_starring_top(self):
+        rec = sample_record(projects=[{"name": "p", "path": "/p", "count": 33,
+                                       "branches": [{"name": "ci/x", "count": 30},
+                                                    {"name": "master", "count": 3}]}])
         out = recall.preview_text(rec, self.NOW)
         branch_lines = [l for l in out.splitlines()
                         if l.lstrip().startswith(("★", "·")) and
@@ -333,10 +375,30 @@ class RenderTest(unittest.TestCase):
         self.assertIn("30", star_line)                  # count shown
 
     def test_preview_single_branch_no_star(self):
-        rec = sample_record(branches=[{"name": "main", "count": 9}])
+        rec = sample_record(projects=[{"name": "p", "path": "/p", "count": 9,
+                                       "branches": [{"name": "main", "count": 9}]}])
         out = recall.preview_text(rec, self.NOW)
         self.assertIn("main", out)
         self.assertNotIn("★", out)
+
+    def test_preview_multi_project_tree_sorted_with_stars(self):
+        rec = sample_record(projects=[
+            {"name": "proctor", "path": "/w/proctor", "count": 4534,
+             "branches": [{"name": "main", "count": 4000}, {"name": "fix", "count": 534}]},
+            {"name": "qor_demo", "path": "/w/qor_demo", "count": 854,
+             "branches": [{"name": "master", "count": 854}]},
+        ])
+        out = recall.preview_text(rec, self.NOW)
+        self.assertIn("项目/分支", out)
+        lines = out.splitlines()
+        proctor_i = next(i for i, l in enumerate(lines) if "proctor" in l)
+        qor_i = next(i for i, l in enumerate(lines) if "qor_demo" in l)
+        self.assertLess(proctor_i, qor_i)               # bigger project on top
+        self.assertTrue(lines[proctor_i].startswith("★"))   # top project starred
+        self.assertTrue(lines[qor_i].startswith("·"))
+        # branches nested (indented) under their project
+        main_line = next(l for l in lines if "main" in l and "4000" in l)
+        self.assertTrue(main_line.startswith("    "))
 
     def test_preview_caps_long_trail(self):
         rec = sample_record(prompts=[f"p{i}" for i in range(20)])

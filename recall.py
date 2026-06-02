@@ -15,22 +15,62 @@ PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 CACHE_PATH = os.path.expanduser("~/.claude/.recall-cache.json")
 # Bump whenever extract()'s output shape or logic changes, so stale records
 # (cached under an unchanged file mtime) are invalidated and re-extracted.
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 _ACK = {"ok", "y", "yes", "好", "嗯"}
 _FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
-def _branch_stats(names):
-    """names: branch per message in file order. Return [{name, count}] in
-    first-seen order — count is conversation volume on that branch."""
-    cnt, order = {}, []
-    for b in names:
-        if b not in cnt:
-            cnt[b] = 0
-            order.append(b)
-        cnt[b] += 1
-    return [{"name": n, "count": cnt[n]} for n in order]
+def _repo_root(cwd):
+    """Resolve a cwd to its project root by walking up to the first ancestor
+    whose .git is a directory (the main repo). A worktree's .git is a *file*,
+    so worktrees collapse to their main repo. Falls back to the nearest
+    .git-file dir, else the cwd itself (dir gone / not a repo)."""
+    p, fallback = cwd, None
+    while True:
+        g = os.path.join(p, ".git")
+        if os.path.isdir(g):
+            return p
+        if fallback is None and os.path.exists(g):
+            fallback = p
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    return fallback or cwd
+
+
+def _project_tree(pairs, root_fn=_repo_root):
+    """pairs: (cwd, branch_or_None) per user/assistant message, file order.
+    Group by project (repo root), each with its branch breakdown. Projects
+    sorted by message count desc, branches within each sorted by count desc."""
+    projs, order, memo = {}, [], {}
+    for cwd, br in pairs:
+        if not cwd:
+            continue
+        root = memo.get(cwd)
+        if root is None:
+            root = memo[cwd] = root_fn(cwd)
+        p = projs.get(root)
+        if p is None:
+            p = projs[root] = {"count": 0, "bc": {}, "border": []}
+            order.append(root)
+        p["count"] += 1
+        if br:
+            if br not in p["bc"]:
+                p["bc"][br] = 0
+                p["border"].append(br)
+            p["bc"][br] += 1
+    result = []
+    for root in order:
+        p = projs[root]
+        branches = sorted(
+            ({"name": b, "count": p["bc"][b]} for b in p["border"]),
+            key=lambda x: x["count"], reverse=True)
+        result.append({"name": project_short(root), "path": root,
+                       "count": p["count"], "branches": branches})
+    result.sort(key=lambda x: x["count"], reverse=True)
+    return result
 
 
 def _snippet(text, limit=200):
@@ -95,22 +135,34 @@ def fzf_line(record, now):
     return "\t".join([reltime, proj, last, trail, record["session_id"], record["cwd"]])
 
 
+def _branch_section(projects):
+    """Render the project/branch block. One project -> just its branches;
+    several -> a project→branch tree. ★ marks the most-active at each level."""
+    if not projects:
+        return []
+    if len(projects) == 1:
+        branches = projects[0]["branches"]
+        if not branches:
+            return []
+        if len(branches) == 1:
+            return [f"分支: {branches[0]['name']}"]
+        out = ["分支 (★=对话最多):"]
+        for j, b in enumerate(branches):
+            out.append(f"  {'★' if j == 0 else '·'} {b['name']} ({b['count']})")
+        return out
+    out = ["项目/分支 (★=对话最多):"]
+    for i, p in enumerate(projects):
+        out.append(f"{'★' if i == 0 else '·'} {p['name']} ({p['count']})")
+        for j, b in enumerate(p["branches"]):
+            out.append(f"    {'★' if j == 0 else '·'} {b['name']} ({b['count']})")
+    return out
+
+
 def preview_text(record, now):
     out = [f"{project_short(record['cwd'])}  ·  "
            f"{relative_time(int(record['mtime']), now)}  ·  "
            f"{record['msg_count']} 条消息"]
-    branches = record.get("branches")
-    if not branches and record.get("branch"):
-        branches = [{"name": record["branch"], "count": 0}]
-    if branches and len(branches) == 1:
-        out.append(f"分支: {branches[0]['name']}")
-    elif branches:
-        ranked = sorted(branches, key=lambda b: b["count"], reverse=True)
-        top = ranked[0]["name"]
-        out.append("分支 (★=对话最多):")
-        for b in ranked:
-            marker = "★" if b["name"] == top else "·"
-            out.append(f"  {marker} {b['name']} ({b['count']})")
+    out += _branch_section(record.get("projects") or [])
     if record.get("ai_title"):
         out.append(f"标题: {record['ai_title']}")
     out += ["", "── Prompt 轨迹 (最近在最下) ──"]
@@ -222,9 +274,9 @@ def build_index(paths, cache, extract_fn=None):
 
 def extract(path):
     """Parse a session JSONL file into one record dict, or None if it's empty."""
-    cwd = branch = ai_title = last_assistant = None
+    cwd = ai_title = last_assistant = None
     prompts, files, seen = [], [], set()
-    branch_seq = []  # branch per user/assistant message, in file order
+    msg_cwb = []  # (cwd, branch) per user/assistant message, in file order
     msg_count = 0
     try:
         f = open(path, encoding="utf-8")
@@ -254,12 +306,9 @@ def extract(path):
                 continue
             if cwd is None and d.get("cwd"):
                 cwd = d["cwd"]
-            if d.get("gitBranch"):
-                branch = d["gitBranch"]
             if t in ("user", "assistant"):
                 msg_count += 1
-                if d.get("gitBranch"):
-                    branch_seq.append(d["gitBranch"])
+                msg_cwb.append((d.get("cwd"), d.get("gitBranch")))
             if t == "assistant":
                 for b in ((d.get("message") or {}).get("content") or []):
                     if not isinstance(b, dict):
@@ -290,8 +339,7 @@ def extract(path):
         "session_id": stem,
         "path": os.path.abspath(path),
         "cwd": cwd,
-        "branch": branch,
-        "branches": _branch_stats(branch_seq),
+        "projects": _project_tree(msg_cwb),
         "ai_title": ai_title,
         "prompts": prompts,
         "files_changed": files[:20],
