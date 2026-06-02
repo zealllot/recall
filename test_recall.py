@@ -297,6 +297,19 @@ class TruncateColsTest(unittest.TestCase):
         self.assertEqual(recall._truncate_cols("你好世界很长", 6), "你好…")
 
 
+class PadTest(unittest.TestCase):
+    def test_pads_ascii_to_display_width(self):
+        self.assertEqual(recall._pad("ab", 5), "ab   ")
+
+    def test_counts_cjk_as_two_columns(self):
+        # "刚刚" = 4 display cols -> 1 trailing space to reach 5
+        self.assertEqual(recall._pad("刚刚", 5), "刚刚 ")
+
+    def test_truncates_when_too_long(self):
+        out = recall._pad("abcdefgh", 5)
+        self.assertEqual(sum(recall._char_cols(c) for c in out), 5)
+
+
 class RenderTest(unittest.TestCase):
     NOW = 1_000_000
 
@@ -318,34 +331,42 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(cwd, "/Users/me/go/src/github.com/theplant/mcd-website")
 
     def test_fzf_line_keeps_id_and_cwd_in_unsearched_tail_fields(self):
-        # fields 5,6 carry id/cwd; --with-nth=1,2,3,4 keeps them off display/search
+        # fields 3,4 carry id/cwd; --with-nth=1,2 keeps them off display/search
         fields = recall.fzf_line(sample_record(), self.NOW).split("\t")
-        self.assertEqual(len(fields), 6)
-        self.assertEqual(fields[4], SID)
-        self.assertEqual(fields[5], "/Users/me/go/src/github.com/theplant/mcd-website")
+        self.assertEqual(len(fields), 4)
+        self.assertEqual(fields[2], SID)
+        self.assertEqual(fields[3], "/Users/me/go/src/github.com/theplant/mcd-website")
+
+    def test_fzf_line_visible_columns_are_padded_for_alignment(self):
+        fields = recall.fzf_line(sample_record(), self.NOW).split("\t")
+        # reltime padded to a fixed display width before the project column
+        self.assertTrue(fields[0].startswith(recall._pad(
+            recall.relative_time(999_000, self.NOW), recall._TIME_COL)))
+        self.assertIn("mcd-website", fields[0])
+        self.assertIn("帮我部署 prod", fields[0])  # last prompt lives in the visible col
 
     def test_fzf_line_search_field_contains_whole_trail(self):
-        line = recall.fzf_line(sample_record(), self.NOW)
-        trail = line.split("\t")[3]
-        self.assertIn("时区", trail)
-        self.assertIn("帮我部署", trail)
+        searchable = " ".join(recall.fzf_line(sample_record(), self.NOW).split("\t")[:2])
+        self.assertIn("时区", searchable)
+        self.assertIn("帮我部署", searchable)
 
-    def test_fzf_line_search_field_includes_branches_projects_title(self):
-        # so `recall nutrition` finds a session by branch/topic, not just prompts
+    def test_fzf_line_search_includes_branch_and_title_not_redundant_project(self):
         rec = sample_record(
             ai_title="Add parent nutrition field",
             projects=[{"name": "mcd-website", "path": "/p", "count": 9,
                        "branches": [{"name": "mdx-12752-add-parent-nutrition-field",
                                      "count": 9}]}])
-        field = recall.fzf_line(rec, self.NOW).split("\t")[3]
-        self.assertIn("nutrition", field)        # from branch name
-        self.assertIn("mcd-website", field)       # from project name
-        self.assertIn("Add parent nutrition", field)  # from ai title
+        fields = recall.fzf_line(rec, self.NOW).split("\t")
+        searchable = " ".join(fields[:2])
+        self.assertIn("nutrition", searchable)          # branch name searchable
+        self.assertIn("Add parent nutrition", searchable)  # ai title searchable
+        self.assertNotIn("mcd-website", fields[1])      # not duplicated into keyword tail
+        self.assertIn("mcd-website", fields[0])         # already in the visible column
 
     def test_fzf_line_sanitizes_tabs_and_newlines(self):
         rec = sample_record(prompts=["line1\twith\ttabs\nand newline"])
         line = recall.fzf_line(rec, self.NOW)
-        self.assertEqual(len(line.split("\t")), 6)  # field count intact
+        self.assertEqual(len(line.split("\t")), 4)  # field count intact
         self.assertNotIn("\n", line)
 
     def test_preview_contains_key_sections(self):
