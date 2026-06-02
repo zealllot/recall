@@ -292,9 +292,14 @@ def _branch_section(projects, color=False):
         return out
     out = [_c(t("projbranch_hdr"), "36", color)]
     for i, p in enumerate(projects):
-        out.append(line("", i == 0, _c(p["name"], "1", color), p["count"]))
-        out += [line("    ", j == 0, b["name"], b["count"])
-                for j, b in enumerate(p["branches"])]
+        marker = star if i == 0 else "·"
+        name = _c(p["name"], "1", color)
+        if len(p["branches"]) == 1:  # fold a lone branch onto the project line
+            out.append(f"{marker} {name} ({p['count']}) · {p['branches'][0]['name']}")
+        else:
+            out.append(f"{marker} {name} ({p['count']})")
+            out += [line("    ", j == 0, b["name"], b["count"])
+                    for j, b in enumerate(p["branches"])]
     return out
 
 
@@ -312,6 +317,7 @@ def preview_text(record, now, live_pid=None, color=False):
     out.append(c("  ·  ".join(when), "2"))
     if live_pid:
         out.append(c(t("live", live_pid), "32"))
+    out.append("")  # breathing room below the header block
     out += _branch_section(record.get("projects") or [], color)
     if record.get("ai_title"):
         out.append(c(t("title"), "2") + f" {record['ai_title']}")

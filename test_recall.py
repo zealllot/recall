@@ -495,6 +495,25 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("master", star_line)
         self.assertIn("30", star_line)                  # count shown
 
+    def test_preview_multi_project_folds_single_branch_inline(self):
+        rec = sample_record(projects=[
+            {"name": "a", "path": "/a", "count": 10,
+             "branches": [{"name": "HEAD", "count": 10}]},
+            {"name": "b", "path": "/b", "count": 5,
+             "branches": [{"name": "x", "count": 3}, {"name": "y", "count": 2}]}])
+        lines = recall.preview_text(rec, self.NOW).splitlines()
+        a_line = next(l for l in lines if "a (10)" in l)
+        self.assertIn("HEAD", a_line)  # single branch folded onto the project line
+        # b has 2 branches -> still an indented sub-tree
+        self.assertTrue(any(l.startswith("    ") and "x" in l for l in lines))
+
+    def test_preview_has_blank_line_after_header_block(self):
+        lines = recall.preview_text(sample_record(), self.NOW).splitlines()
+        # the project/branch section is preceded by a blank line
+        hdr = next(i for i, l in enumerate(lines) if l.startswith("项目/分支")
+                   or l.startswith("分支"))
+        self.assertEqual(lines[hdr - 1], "")
+
     def test_preview_single_branch_no_star(self):
         rec = sample_record(projects=[{"name": "p", "path": "/p", "count": 9,
                                        "branches": [{"name": "main", "count": 9}]}])
