@@ -611,12 +611,43 @@ class LiveSessionsTest(unittest.TestCase):
 
 
 class ResumeJumpTest(unittest.TestCase):
-    def test_jumps_to_window_when_session_is_live(self):
+    def setUp(self):
+        self._term = os.environ.get("TERM_PROGRAM")
+
+    def tearDown(self):
+        if self._term is None:
+            os.environ.pop("TERM_PROGRAM", None)
+        else:
+            os.environ["TERM_PROGRAM"] = self._term
+
+    def test_jumps_to_window_when_live_and_in_iterm(self):
+        os.environ["TERM_PROGRAM"] = "iTerm.app"
         jumped = []
         rc = recall.resume(sample_record(), live={SID: 4242},
                            jump_fn=lambda pid: jumped.append(pid) or True)
         self.assertEqual(rc, 0)
         self.assertEqual(jumped, [4242])  # jumped instead of spawning claude -r
+
+    def test_does_not_attempt_jump_outside_iterm(self):
+        os.environ["TERM_PROGRAM"] = "Apple_Terminal"
+        jumped = []
+        rc = recall.resume(sample_record(), live={SID: 4242},
+                           jump_fn=lambda pid: jumped.append(pid) or True)
+        self.assertEqual(jumped, [])  # never tried the iTerm2-only jump
+        self.assertEqual(rc, 1)       # fell through; sample cwd doesn't exist
+
+    def test_reports_friendly_error_when_claude_missing(self):
+        os.environ["TERM_PROGRAM"] = "iTerm.app"
+        tmp = tempfile.mkdtemp()
+        rec = sample_record(cwd=tmp)
+        old_exec, old_cwd = recall.os.execvp, os.getcwd()
+        recall.os.execvp = lambda *a: (_ for _ in ()).throw(FileNotFoundError())
+        try:
+            rc = recall.resume(rec, live={})  # not live -> exec path
+        finally:
+            recall.os.execvp = old_exec
+            os.chdir(old_cwd)
+        self.assertEqual(rc, 127)
 
 
 class FzfDecisionTest(unittest.TestCase):

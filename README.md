@@ -40,8 +40,11 @@ or type `exit` and pick the `✕ 退出` row.
 
 Sessions that are **currently running** (per `~/.claude/sessions/<pid>.json`) are
 marked with `●`. Picking one **jumps to its existing iTerm2 tab** (via AppleScript
-+ tty match) instead of starting a duplicate `claude -r`. macOS + iTerm2 only;
-other terminals / tmux fall back to a normal resume.
++ tty match) instead of starting a duplicate `claude -r`. Only attempted when you
+run `recall` inside iTerm2 (`TERM_PROGRAM=iTerm.app`); other terminals / tmux fall
+back to a normal resume. The first jump triggers a one-time macOS prompt asking to
+let your terminal control iTerm2 — allow it (System Settings → Privacy & Security →
+Automation).
 
 ## How it works
 

@@ -40,6 +40,7 @@ _MSG = {
         "fzf_missing": "fzf 未安装，降级为列表。安装: brew install fzf",
         "fzf_offer": "未检测到 fzf（交互选择器需要它）。现在用 brew 安装？[y/N] ",
         "fzf_installing": "正在安装 fzf…",
+        "claude_missing": "找不到 claude 命令，请确认它在 PATH 上。",
     },
     "en": {
         "just_now": "just now", "minutes": "{}m ago", "hours": "{}h ago",
@@ -61,6 +62,7 @@ _MSG = {
         "fzf_missing": "fzf not installed; falling back to list. Install: brew install fzf",
         "fzf_offer": "fzf not found (the picker needs it). Install it now with brew? [y/N] ",
         "fzf_installing": "Installing fzf…",
+        "claude_missing": "Could not find the `claude` command — make sure it's on your PATH.",
     },
 }
 _LANG = "zh"
@@ -571,6 +573,10 @@ end tell
 '''
 
 
+def _in_iterm():
+    return os.environ.get("TERM_PROGRAM") == "iTerm.app"
+
+
 def jump_to_session(pid):
     """Bring the iTerm2 tab running this pid to the front. True if it jumped."""
     tty = _tty_of(pid)
@@ -611,7 +617,7 @@ def resume(record, live=None, jump_fn=jump_to_session):
     sid = record["session_id"]
     if live is None:
         live = live_sessions()
-    if sid in live and jump_fn(live[sid]):
+    if sid in live and _in_iterm() and jump_fn(live[sid]):
         sys.stderr.write(t("jumped", live[sid]) + "\n")
         return 0
     cwd = record["cwd"]
@@ -619,7 +625,11 @@ def resume(record, live=None, jump_fn=jump_to_session):
         sys.stderr.write(t("cwd_gone", cwd, record["path"]) + "\n")
         return 1
     os.chdir(cwd)
-    os.execvp("claude", ["claude", "-r", sid])
+    try:
+        os.execvp("claude", ["claude", "-r", sid])
+    except OSError:  # claude not on PATH (e.g. an alias, or different install)
+        sys.stderr.write(t("claude_missing") + "\n")
+        return 127
 
 
 def run_picker(records, now, query=""):
