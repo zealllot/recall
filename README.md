@@ -71,3 +71,7 @@ runs are instant. See [docs/2026-06-02-recall-design.md](docs/2026-06-02-recall-
 ```sh
 make test         # python3 -m unittest
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
