@@ -38,6 +38,8 @@ _MSG = {
         "cwd_gone": "原目录已不存在，无法原地恢复: {}\ntranscript: {}",
         "jumped": "已跳到正在运行的窗口 (pid {})",
         "fzf_missing": "fzf 未安装，降级为列表。安装: brew install fzf",
+        "fzf_offer": "未检测到 fzf（交互选择器需要它）。现在用 brew 安装？[y/N] ",
+        "fzf_installing": "正在安装 fzf…",
     },
     "en": {
         "just_now": "just now", "minutes": "{}m ago", "hours": "{}h ago",
@@ -57,6 +59,8 @@ _MSG = {
         "cwd_gone": "Original directory is gone; can't resume in place: {}\ntranscript: {}",
         "jumped": "Jumped to the running window (pid {})",
         "fzf_missing": "fzf not installed; falling back to list. Install: brew install fzf",
+        "fzf_offer": "fzf not found (the picker needs it). Install it now with brew? [y/N] ",
+        "fzf_installing": "Installing fzf…",
     },
 }
 _LANG = "zh"
@@ -683,6 +687,43 @@ def resolve_lang(config_path=CONFIG_PATH):
     return lang
 
 
+def _fzf_decision(has_fzf, opted_out, interactive, has_brew):
+    """Pure: 'have' if fzf is present, 'ask' to offer a brew install, else
+    'skip' (user opted out / non-interactive / no brew to install with)."""
+    if has_fzf:
+        return "have"
+    if opted_out or not interactive or not has_brew:
+        return "skip"
+    return "ask"
+
+
+def ensure_fzf(config_path=CONFIG_PATH):
+    """True if fzf is available (or just got installed). On first interactive
+    run without it, offer `brew install fzf`; remember a decline so we only
+    nag once."""
+    cfg = load_config(config_path)
+    decision = _fzf_decision(
+        bool(shutil.which("fzf")), cfg.get("skip_fzf_prompt"),
+        sys.stdin.isatty() and sys.stdout.isatty(), bool(shutil.which("brew")))
+    if decision == "have":
+        return True
+    if decision == "skip":
+        return False
+    sys.stdout.write(t("fzf_offer"))
+    sys.stdout.flush()
+    if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+        cfg["skip_fzf_prompt"] = True
+        save_config(config_path, cfg)
+        return False
+    sys.stdout.write(t("fzf_installing") + "\n")
+    sys.stdout.flush()
+    try:
+        subprocess.run(["brew", "install", "fzf"])
+    except OSError:
+        pass
+    return bool(shutil.which("fzf"))
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if "--help" in argv or "-h" in argv:
@@ -698,15 +739,17 @@ def main(argv=None):
     list_mode = "--list" in argv
     query = " ".join(a for a in argv
                      if not a.startswith("-") and a != ".")
-    now = int(time.time())
 
+    if not list_mode and not ensure_fzf():
+        sys.stderr.write(t("fzf_missing") + "\n")
+        list_mode = True
+
+    now = int(time.time())
     records = index()
     if here:
         records = filter_here(records, _here_root())
 
-    if list_mode or not shutil.which("fzf"):
-        if not list_mode:
-            sys.stderr.write(t("fzf_missing") + "\n")
+    if list_mode:
         run_list(filter_query(records, now, query), now, sys.stdout)
         return 0
     return run_picker(records, now, query)

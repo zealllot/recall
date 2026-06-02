@@ -619,6 +619,33 @@ class ResumeJumpTest(unittest.TestCase):
         self.assertEqual(jumped, [4242])  # jumped instead of spawning claude -r
 
 
+class FzfDecisionTest(unittest.TestCase):
+    def test_have_when_installed(self):
+        self.assertEqual(recall._fzf_decision(True, False, True, True), "have")
+
+    def test_ask_when_missing_interactive_brew_present(self):
+        self.assertEqual(recall._fzf_decision(False, False, True, True), "ask")
+
+    def test_skip_when_user_opted_out(self):
+        self.assertEqual(recall._fzf_decision(False, True, True, True), "skip")
+
+    def test_skip_when_non_interactive(self):
+        self.assertEqual(recall._fzf_decision(False, False, False, True), "skip")
+
+    def test_skip_when_no_brew(self):
+        self.assertEqual(recall._fzf_decision(False, False, True, False), "skip")
+
+
+class EnsureFzfTest(unittest.TestCase):
+    def test_true_without_prompting_when_present(self):
+        orig = recall.shutil.which
+        recall.shutil.which = lambda name: "/opt/homebrew/bin/fzf"
+        try:
+            self.assertTrue(recall.ensure_fzf())
+        finally:
+            recall.shutil.which = orig
+
+
 class RunPickerCleanupTest(unittest.TestCase):
     def test_removes_preview_dir_even_when_nothing_selected(self):
         created = {}

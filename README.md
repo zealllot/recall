@@ -12,8 +12,11 @@ prompt trail** you typed, lets you fuzzy-search it, shows a computed
 
 ```sh
 make install          # copies recall.py -> ~/bin/recall
-brew install fzf      # for the interactive picker (optional; falls back to --list)
 ```
+
+The interactive picker needs `fzf`. On first run without it, `recall` offers to
+`brew install fzf` for you (you confirm; declining is remembered). Without fzf it
+just falls back to the `--list` table.
 
 ## Usage
 
