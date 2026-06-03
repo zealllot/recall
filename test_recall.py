@@ -273,6 +273,15 @@ class ExtractEdgeTest(unittest.TestCase):
         self.assertEqual(rec["prompts"], ["real prompt here"])
 
 
+class ExtractEntrypointTest(unittest.TestCase):
+    def test_captures_entrypoint(self):
+        tmp = tempfile.mkdtemp()
+        lines = [{"type": "user", "cwd": "/r", "entrypoint": "sdk-cli",
+                  "message": {"role": "user", "content": "you are an expert"}}]
+        rec = recall.extract(write_session(tmp, SID, lines))
+        self.assertEqual(rec["entrypoint"], "sdk-cli")
+
+
 class BuildIndexTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -292,6 +301,16 @@ class BuildIndexTest(unittest.TestCase):
         recs, _ = recall.build_index([self.a, self.b], {}, self.fake_extract)
         self.assertEqual([r["session_id"] for r in recs], ["b.jsonl", "a.jsonl"])
         self.assertCountEqual(self.calls, [self.a, self.b])
+
+    def test_excludes_sdk_cli_sessions(self):
+        def fx(path):
+            ep = "sdk-cli" if path == self.a else "cli"
+            return {"session_id": os.path.basename(path),
+                    "mtime": os.path.getmtime(path), "entrypoint": ep}
+        recs, _ = recall.build_index([self.a, self.b], {}, fx)
+        names = [r["session_id"] for r in recs]
+        self.assertNotIn("a.jsonl", names)  # sdk-cli (SDK/headless) excluded
+        self.assertIn("b.jsonl", names)
 
     def test_reuses_cache_when_mtime_unchanged(self):
         _, cache = recall.build_index([self.a, self.b], {}, self.fake_extract)

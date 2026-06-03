@@ -98,7 +98,7 @@ def save_config(path, cfg):
         pass
 # Bump whenever extract()'s output shape or logic changes, so stale records
 # (cached under an unchanged file mtime) are invalidated and re-extracted.
-CACHE_VERSION = 5
+CACHE_VERSION = 6
 
 _ACK = {"ok", "y", "yes", "好", "嗯"}
 _FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -439,7 +439,8 @@ def build_index(paths, cache, extract_fn=None):
         else:
             record = extract_fn(path)
         new_cache[path] = {"mtime": mtime, "record": record}
-        if record is not None:
+        # skip SDK/headless (`claude -p`, Agent SDK) sessions — not interactive
+        if record is not None and record.get("entrypoint") != "sdk-cli":
             items.append((mtime, record))
     items.sort(key=lambda it: it[0], reverse=True)
     return [r for _, r in items], new_cache
@@ -447,7 +448,7 @@ def build_index(paths, cache, extract_fn=None):
 
 def extract(path):
     """Parse a session JSONL file into one record dict, or None if it's empty."""
-    cwd = ai_title = last_assistant = started = None
+    cwd = ai_title = last_assistant = started = entrypoint = None
     prompts, files, seen = [], [], set()
     msg_cwb = []  # (cwd, branch) per user/assistant message, in file order
     msg_count = 0
@@ -481,6 +482,8 @@ def extract(path):
                 cwd = d["cwd"]
             if started is None and d.get("timestamp"):
                 started = _parse_ts(d["timestamp"])  # first timestamp = session start
+            if entrypoint is None and d.get("entrypoint"):
+                entrypoint = d["entrypoint"]  # 'cli' = interactive; 'sdk-cli' = SDK/headless
             if t in ("user", "assistant"):
                 msg_count += 1
                 msg_cwb.append((d.get("cwd"), d.get("gitBranch")))
@@ -520,6 +523,7 @@ def extract(path):
         "files_changed": files[:20],
         "last_assistant": last_assistant,
         "started": started,
+        "entrypoint": entrypoint,
         "mtime": mtime,
         "msg_count": msg_count,
     }
